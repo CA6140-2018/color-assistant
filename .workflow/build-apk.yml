@@ -40,4 +40,4 @@ triggers:
       - main
 notify: []
 strategy:
-  blocking: true
+  blocking: false
