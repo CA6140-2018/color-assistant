@@ -15,4 +15,4 @@ pip install --user buildozer 'cython<3.0'
 mkdir -p fonts
 curl -sL -o fonts/NotoSansSC-Regular.otf 'https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Sans/OTF/SimplifiedChinese/NotoSansSC-Regular.otf' || true
 
-buildozer android debug
+echo "y" | buildozer android debug

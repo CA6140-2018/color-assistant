@@ -51,4 +51,4 @@ build_dir = build
 
 # 日志
 log_level = 2
-warn_on_root = 1
+warn_on_root = 0
