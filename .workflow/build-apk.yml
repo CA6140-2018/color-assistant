@@ -1,0 +1,29 @@
+version: '1.0'
+name: build-apk
+displayName: 构建 Android APK
+triggers:
+  trigger: auto
+  push:
+    branches:
+      prefix:
+        - main
+stages:
+  - name: build-stage
+    displayName: 构建 APK
+    strategy: fast
+    trigger: auto
+    steps:
+      - step: build@python
+        name: build_apk
+        displayName: 构建 Android APK
+        commands:
+          - apt-get update
+          - apt-get install -y autoconf automake libtool pkg-config cmake libssl-dev libffi-dev libltdl-dev libncurses5-dev openjdk-17-jdk ccache zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev wget unzip git
+          - pip install buildozer cython==0.29.36
+          - mkdir -p fonts
+          - curl -sL -o fonts/NotoSansSC-Regular.otf "https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Sans/OTF/SimplifiedChinese/NotoSansSC-Regular.otf" || true
+          - buildozer android debug
+        artifacts:
+          - name: colorassistant-apk
+            path:
+              - bin/*.apk

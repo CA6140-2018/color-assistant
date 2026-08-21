@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Buildozer / Android
+.buildozer/
+bin/
+android-sdk/
+android-ndk/
+*.apk
+*.aab
+*.keystore
+
+# Kivy
+.kivy/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Fonts (downloaded during build, not committed)
+fonts/*.otf
+fonts/*.ttf
