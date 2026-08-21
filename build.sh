@@ -1,5 +1,5 @@
 #!/bin/bash
-set -exo pipefail
+set -ex
 
 echo "=== Build started at $(date) ==="
 echo "=== Working directory: $(pwd) ==="
@@ -20,9 +20,22 @@ mkdir -p fonts
 curl -sL -o fonts/NotoSansSC-Regular.otf 'https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Sans/OTF/SimplifiedChinese/NotoSansSC-Regular.otf' || true
 
 echo "=== Starting buildozer at $(date) ==="
-echo "=== Free disk space: ==="
 df -h /
 
-echo "y" | buildozer android debug 2>&1 | tee /tmp/buildozer.log
+# Run buildozer and capture output to log file
+mkdir -p bin
+set +e
+echo "y" | buildozer android debug > bin/build_full.log 2>&1
+BUILD_EXIT=$?
+set -e
 
-echo "=== Build completed at $(date) ==="
+echo "=== Buildozer exit code: $BUILD_EXIT ==="
+echo "=== Build ended at $(date) ==="
+echo "=== Last 100 lines of log: ==="
+tail -100 bin/build_full.log
+echo "=== Log size: ==="
+wc -l bin/build_full.log
+ls -la bin/
+
+# Always exit 0 so artifact gets uploaded even on failure
+exit 0
