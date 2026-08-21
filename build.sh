@@ -39,8 +39,8 @@ git config --global http.lowSpeedLimit 0
 git config --global http.lowSpeedTime 999999
 git config --global core.compression 0
 
-# Install buildozer and cython
-pip install --user buildozer 'cython<3.0'
+# Install buildozer and cython (pin versions for compatibility)
+pip install --user 'buildozer==1.6.0' 'cython<3.0'
 
 # Download Chinese font
 mkdir -p fonts
@@ -57,8 +57,9 @@ BUILD_EXIT=1
 for i in 1 2 3; do
   echo "=== Build attempt $i at $(date) ==="
   set +e
+  # PIPESTATUS[1] = buildozer exit code (PIPESTATUS[0] is echo "y")
   echo "y" | buildozer android debug 2>&1 | tee bin/build_full.log | tail -100
-  BUILD_EXIT=${PIPESTATUS[0]}
+  BUILD_EXIT=${PIPESTATUS[1]}
   set -e
   echo "=== Build attempt $i exit code: $BUILD_EXIT ==="
   if [ $BUILD_EXIT -eq 0 ]; then

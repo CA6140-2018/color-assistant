@@ -35,8 +35,8 @@ log_level = 2
 # 构建类型
 android.debug_artifact = bin/colorassistant-debug.apk
 
-# p4a 设置
-p4a.branch = stable
+# p4a 设置（使用 develop 分支以支持 AAB）
+p4a.branch = develop
 
 # 图标和启动画面（使用默认，可选替换）
 #android.icon = icon.png
