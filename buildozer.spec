@@ -27,7 +27,7 @@ android.archs = arm64-v8a, armeabi-v7a
 
 # 全屏 + 自动旋转
 fullscreen = 1
-orientation = sensor
+orientation = all
 
 # 日志级别（debug 构建用 2，release 用 1）
 log_level = 2
