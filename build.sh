@@ -1,14 +1,10 @@
 #!/bin/bash
-set -ex
+set -exo pipefail
 
 echo "=== Build started at $(date) ==="
-echo "=== Hostname: $(hostname) ==="
 echo "=== Working directory: $(pwd) ==="
-echo "=== Disk space: ==="
 df -h
-echo "=== Memory: ==="
 free -h
-echo "=== Files in directory: ==="
 ls -la
 
 mkdir -p /usr/share/man/man1/
@@ -24,6 +20,9 @@ mkdir -p fonts
 curl -sL -o fonts/NotoSansSC-Regular.otf 'https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Sans/OTF/SimplifiedChinese/NotoSansSC-Regular.otf' || true
 
 echo "=== Starting buildozer at $(date) ==="
-echo "y" | buildozer android debug
+echo "=== Free disk space: ==="
+df -h /
+
+echo "y" | buildozer android debug 2>&1 | tee /tmp/buildozer.log
 
 echo "=== Build completed at $(date) ==="

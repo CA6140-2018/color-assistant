@@ -23,7 +23,7 @@ requirements = python3,kivy==2.3.1,numpy
 android.permissions = CAMERA
 android.api = 33
 android.minapi = 24
-android.archs = arm64-v8a, armeabi-v7a
+android.archs = arm64-v8a
 
 # 全屏 + 自动旋转
 fullscreen = 1
