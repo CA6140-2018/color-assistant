@@ -1,33 +1,43 @@
-version: '1.0'
+version: "1.0"
 name: build-apk
 displayName: 构建Android APK
+stages:
+- name: build
+  displayName: 构建APK
+  strategy: naturally
+  trigger: auto
+  steps:
+  - step: build@python
+    name: ""
+    displayName: 构建APK
+    pythonVersion: '3.11'
+    commands:
+    - apt-get update
+    - apt-get install -y autoconf automake libtool pkg-config cmake libssl-dev libffi-dev libltdl-dev libncurses5-dev openjdk-17-jdk ccache zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev wget unzip git
+    - pip install buildozer cython==0.29.36
+    - mkdir -p fonts
+    - curl -sL -o fonts/NotoSansSC-Regular.otf "https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Sans/OTF/SimplifiedChinese/NotoSansSC-Regular.otf" || true
+    - buildozer android debug
+    artifacts:
+    - name: APK
+      path:
+      - bin
+      type: .tar.gz
+    caches:
+    - "~/.cache/pip"
+    - "~/.buildozer"
+    notify: []
+    strategy:
+      retry: "0"
+      resource:
+        cpu: "4"
+        memory: "8"
 triggers:
   trigger: auto
   push:
     branches:
       prefix:
-        - main
-stages:
-  - name: build-stage
-    displayName: 构建APK
-    strategy: fast
-    trigger: auto
-    steps:
-      - step: build@python
-        name: install_deps
-        displayName: 安装依赖
-        commands:
-          - apt-get update
-          - apt-get install -y autoconf automake libtool pkg-config cmake libssl-dev libffi-dev libltdl-dev libncurses5-dev openjdk-17-jdk ccache zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev wget unzip git
-          - pip install buildozer cython==0.29.36
-      - step: build@python
-        name: build_apk
-        displayName: 构建APK
-        commands:
-          - mkdir -p fonts
-          - curl -sL -o fonts/NotoSansSC-Regular.otf "https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Sans/OTF/SimplifiedChinese/NotoSansSC-Regular.otf" || true
-          - buildozer android debug
-        artifacts:
-          - name: colorassistant-apk
-            path:
-              - bin/*.apk
+      - main
+notify: []
+strategy:
+  blocking: true
