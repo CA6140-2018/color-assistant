@@ -1,6 +1,6 @@
 version: '1.0'
 name: build-apk
-displayName: 构建 Android APK
+displayName: 构建Android APK
 triggers:
   trigger: auto
   push:
@@ -9,17 +9,21 @@ triggers:
         - main
 stages:
   - name: build-stage
-    displayName: 构建 APK
+    displayName: 构建APK
     strategy: fast
     trigger: auto
     steps:
       - step: build@python
-        name: build_apk
-        displayName: 构建 Android APK
+        name: install_deps
+        displayName: 安装依赖
         commands:
           - apt-get update
           - apt-get install -y autoconf automake libtool pkg-config cmake libssl-dev libffi-dev libltdl-dev libncurses5-dev openjdk-17-jdk ccache zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev wget unzip git
           - pip install buildozer cython==0.29.36
+      - step: build@python
+        name: build_apk
+        displayName: 构建APK
+        commands:
           - mkdir -p fonts
           - curl -sL -o fonts/NotoSansSC-Regular.otf "https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Sans/OTF/SimplifiedChinese/NotoSansSC-Regular.otf" || true
           - buildozer android debug
