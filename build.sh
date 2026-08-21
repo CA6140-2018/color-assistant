@@ -1,8 +1,8 @@
 #!/bin/bash
 set -ex
 
-cd /workspace || cd /home || cd /tmp
 pwd
+ls -la
 mkdir -p /usr/share/man/man1/
 apt-get update
 apt-get install -y --fix-broken autoconf automake libtool pkg-config cmake libssl-dev libffi-dev libltdl-dev libncurses5-dev openjdk-17-jdk ccache zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev wget unzip git
