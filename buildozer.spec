@@ -16,8 +16,8 @@ source.include_exts = py,png,jpg,jpeg,kv,atlas,otf,ttf,json,txt
 source.exclude_dirs = __pycache__, .git, build, dist, bin
 source.exclude_patterns = requirements.txt, README.md, *.spec.bak
 
-# 依赖（不包含 opencv，Android 用 Kivy 原生 Camera）
-requirements = python3,kivy==2.3.1,numpy
+# 依赖（不包含 opencv 与 numpy，Android 用 Kivy 原生 Camera + 纯 Python 取色，缩短交叉编译）
+requirements = python3,kivy==2.3.1
 
 # Android 设置
 android.permissions = CAMERA

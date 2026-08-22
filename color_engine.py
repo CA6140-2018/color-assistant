@@ -9,8 +9,6 @@ import colorsys
 from dataclasses import dataclass, field
 from typing import List, Tuple, Dict, Optional
 
-import numpy as np
-
 
 # ──────────────────────────────────────────────
 # 颜色类
@@ -514,48 +512,115 @@ class RecipeFinder:
 # 图像取色
 # ──────────────────────────────────────────────
 
-def extract_dominant_color(image: np.ndarray, k: int = 3) -> Color:
+class Frame:
+    """轻量像素帧，避免在 Android 上依赖 numpy。
+
+    ``data`` 为行主序像素字节，``bgr_at`` 负责按需解码为 BGR：
+      - src="bgr"：data 直接是 BGR 交错字节（桌面 OpenCV 帧）
+      - src="rgba_flip"：Kivy 纹理像素（RGBA，行自下而上），
+        解码时垂直翻转并将 RGB 转成 BGR，与桌面帧格式保持一致
     """
-    从 BGR 图像中提取主色（简化 K-means）。
-    使用像素直方图近似法，速度快，适合实时取色。
+
+    def __init__(self, data: bytes, width: int, height: int, src: str = "bgr"):
+        self.data = data
+        self.width = width
+        self.height = height
+        self.src = src
+
+    @property
+    def shape(self) -> Tuple[int, int, int]:
+        return (self.height, self.width, 3)
+
+    def bgr_at(self, x: int, y: int) -> Tuple[int, int, int]:
+        d = self.data
+        if self.src == "bgr":
+            i = (y * self.width + x) * 3
+            return (d[i], d[i + 1], d[i + 2])
+        # rgba_flip：Kivy 纹理行自下而上，且为 RGBA 顺序
+        sy = self.height - 1 - y
+        i = (sy * self.width + x) * 4
+        r, g, b = d[i], d[i + 1], d[i + 2]
+        return (b, g, r)
+
+
+def _dist2(p1: Tuple[float, float, float], p2: Tuple[float, float, float]) -> float:
+    return (p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2 + (p1[2] - p2[2]) ** 2
+
+
+def extract_dominant_color(image: Frame, k: int = 3) -> Color:
     """
-    pixels = image.reshape(-1, 3).astype(np.float32)
-    # 下采样以加速
-    if len(pixels) > 10000:
-        indices = np.random.choice(len(pixels), 10000, replace=False)
-        pixels = pixels[indices]
+    从 BGR 帧中提取主色（简化 K-means，纯 Python 实现）。
+    像素按网格下采样以加速；手动取色可接受亚秒级耗时。
+    """
+    if image is None:
+        return Color(128, 128, 128)
+    h, w = image.shape[:2]
+
+    # 网格下采样，最多约 MAX_SAMPLES 个像素点
+    max_samples = 4000
+    stride = max(1, int((h * w / max(1, max_samples)) ** 0.5))
+    samples = []
+    y = 0
+    while y < h:
+        x = 0
+        while x < w:
+            samples.append(image.bgr_at(x, y))
+            x += stride
+        y += stride
+
+    n = len(samples)
+    if n == 0:
+        return Color(128, 128, 128)
+
+    k = max(1, min(k, n))
 
     # 简易 K-means
-    k = min(k, len(pixels))
-    if k < 1:
-        k = 1
+    import random
+    random.seed(42)
+    centers = random.sample(samples, k)
 
-    # 随机初始化中心
-    rng = np.random.default_rng(42)
-    centers = pixels[rng.choice(len(pixels), k, replace=False)]
-
+    clusters = [[] for _ in range(k)]
     for _ in range(10):
-        # 分配到最近的中心
-        dists = np.linalg.norm(pixels[:, None, :] - centers[None, :, :], axis=2)
-        labels = np.argmin(dists, axis=1)
-        # 更新中心
+        clusters = [[] for _ in range(k)]
+        for p in samples:
+            best = 0
+            bd = _dist2(p, centers[0])
+            for ci in range(1, k):
+                dd = _dist2(p, centers[ci])
+                if dd < bd:
+                    bd = dd
+                    best = ci
+            clusters[best].append(p)
         for ci in range(k):
-            mask = labels == ci
-            if mask.any():
-                centers[ci] = pixels[mask].mean(axis=0)
+            if clusters[ci]:
+                sb = sg = sr = 0
+                m = len(clusters[ci])
+                for b, g, r in clusters[ci]:
+                    sb += b
+                    sg += g
+                    sr += r
+                centers[ci] = (sb / m, sg / m, sr / m)
 
-    # 选择最大簇的中心
-    counts = np.bincount(labels, minlength=k)
-    dominant = centers[np.argmax(counts)]
-    b, g, r = int(round(dominant[0])), int(round(dominant[1])), int(round(dominant[2]))
-    return Color(max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b)))
+    # 选择像素最多的簇的中心
+    dom = 0
+    for ci in range(1, k):
+        if len(clusters[ci]) > len(clusters[dom]):
+            dom = ci
+    b, g, r = centers[dom]
+    return Color(
+        max(0, min(255, int(round(r)))),
+        max(0, min(255, int(round(g)))),
+        max(0, min(255, int(round(b)))),
+    )
 
 
-def average_color_region(image: np.ndarray, center: Tuple[int, int], radius: int = 10) -> Color:
+def average_color_region(image: Frame, center: Tuple[int, int], radius: int = 10) -> Color:
     """
-    取图像中以 center 为中心、radius 为半径的圆形区域的平均色。
-    image 为 BGR 格式。
+    取帧中以 center 为中心、radius 为半径的圆形区域的平均色。
+    Frame.bgr_at 返回 BGR。
     """
+    if image is None:
+        return Color(128, 128, 128)
     h, w = image.shape[:2]
     cx, cy = center
     y0 = max(0, cy - radius)
@@ -563,23 +628,41 @@ def average_color_region(image: np.ndarray, center: Tuple[int, int], radius: int
     x0 = max(0, cx - radius)
     x1 = min(w, cx + radius)
 
-    region = image[y0:y1, x0:x1]
-    if region.size == 0:
+    if y1 <= y0 or x1 <= x0:
         return Color(128, 128, 128)
 
-    # 圆形掩码
-    ph, pw = region.shape[:2]
-    yy, xx = np.ogrid[:ph, :pw]
-    mask = (xx - pw / 2) ** 2 + (yy - ph / 2) ** 2 <= radius ** 2
-    masked = region[mask]
+    # 圆形掩码（以区域中心为圆心）
+    crx = x0 + (x1 - x0) / 2.0
+    cry = y0 + (y1 - y0) / 2.0
+    sb = sg = sr = 0
+    count = 0
+    for yy in range(y0, y1):
+        for xx in range(x0, x1):
+            dx = xx - crx
+            dy = yy - cry
+            if dx * dx + dy * dy <= radius * radius:
+                b, g, r = image.bgr_at(xx, yy)
+                sb += b
+                sg += g
+                sr += r
+                count += 1
 
-    if masked.size == 0:
-        b, g, r = region.mean(axis=(0, 1))
-    else:
-        b, g, r = masked.mean(axis=0)
+    if count == 0:
+        # 圆形为空时退化为整块区域平均
+        for yy in range(y0, y1):
+            for xx in range(x0, x1):
+                b, g, r = image.bgr_at(xx, yy)
+                sb += b
+                sg += g
+                sr += r
+                count += 1
 
+    if count == 0:
+        return Color(128, 128, 128)
+
+    m = count
     return Color(
-        max(0, min(255, int(round(r)))),
-        max(0, min(255, int(round(g)))),
-        max(0, min(255, int(round(b)))),
+        max(0, min(255, int(round(sr / m)))),
+        max(0, min(255, int(round(sg / m)))),
+        max(0, min(255, int(round(sb / m)))),
     )

@@ -56,7 +56,8 @@ try:
 except ImportError:
     HAS_CV2 = False
 
-import numpy as np
+# 注意：不在此处顶层导入 numpy。
+# 桌面端 numpy 随 OpenCV 提供；Android 端不安装 numpy，仅用 Frame（纯 Python）。
 
 from kivy.app import App
 from kivy.clock import Clock
@@ -80,6 +81,7 @@ if _cjk_font:
 
 from color_engine import (
     Color,
+    Frame,
     RecipeFinder,
     ColorMixer,
     average_color_region,
@@ -197,7 +199,9 @@ class CameraView(FloatLayout):
         if not ret:
             return
 
-        self._frame = frame  # BGR
+        # 桌面端才有 OpenCV，numpy 一定可用，这里局部导入
+        import numpy as np
+        self._frame = Frame(frame.tobytes(), frame.shape[1], frame.shape[0], src="bgr")  # BGR
 
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         frame_rgb = np.rot90(frame_rgb)
@@ -234,10 +238,8 @@ class CameraView(FloatLayout):
             pixels = tex.pixels
             if not pixels:
                 return
-            # RGBA → BGR (top-down)，与 OpenCV 帧格式统一
-            arr = np.frombuffer(pixels, dtype=np.uint8).reshape(h, w, 4)
-            arr = arr[::-1, :, :3][:, :, ::-1].copy()
-            self._frame = arr
+            # 存为 Frame，仅在取色时按需解码（无需 numpy，避免逐帧转换开销）
+            self._frame = Frame(pixels, w, h, src="rgba_flip")
         except Exception:
             pass
 
