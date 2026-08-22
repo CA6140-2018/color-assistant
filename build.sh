@@ -18,9 +18,26 @@ ls -la || true
 # Create man dir (needed for JDK)
 mkdir -p /usr/share/man/man1/
 
-# Install dependencies
-apt-get update
-apt-get install -y --fix-broken autoconf automake libtool pkg-config cmake libssl-dev libffi-dev libltdl-dev libncurses5-dev openjdk-17-jdk ccache zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev wget unzip git curl ca-certificates
+# Install dependencies (非交互 + 下载重试 + 失败自愈，避免镜像间歇性挂起导致整个步骤被判定失败)
+export DEBIAN_FRONTEND=noninteractive
+APT_OPTS="-y --fix-broken --no-install-recommends -o Acquire::Retries=5 -o Acquire::http::Timeout=60 -o DPkg::Options::=--force-confold"
+APT_PKGS="autoconf automake libtool pkg-config cmake libssl-dev libffi-dev libltdl-dev libncurses5-dev openjdk-17-jdk ccache zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev wget unzip git curl ca-certificates"
+
+_install_deps() {
+  for attempt in 1 2 3; do
+    echo "=== apt install attempt $attempt at $(date) ==="
+    if timeout 900 bash -c "apt-get update && apt-get install $APT_OPTS $APT_PKGS"; then
+      echo "=== apt install OK on attempt $attempt ==="
+      return 0
+    fi
+    echo "=== apt install attempt $attempt failed ($?), retrying... ==="
+  done
+  echo "!!! apt install failed after 3 attempts"
+  return 1
+}
+_install_deps
+pkill -9 apt-get 2>/dev/null || true
+pkill -9 dpkg 2>/dev/null || true
 
 export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 export PATH="$JAVA_HOME/bin:$PATH:$HOME/.local/bin"
