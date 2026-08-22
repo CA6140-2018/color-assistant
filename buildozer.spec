@@ -25,6 +25,11 @@ android.api = 33
 android.minapi = 24
 android.archs = arm64-v8a
 
+# 固定 NDK 版本（国内镜像脚本按此版本预下载），避免每次联网去 Google 找版本
+android.ndk_version = 25c
+# 自动接受 SDK 许可，避免交互卡住
+android.accept_sdk_license = True
+
 # 全屏 + 自动旋转
 fullscreen = 1
 orientation = all
