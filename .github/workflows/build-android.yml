@@ -34,7 +34,7 @@ jobs:
       - name: Install buildozer
         run: |
           pip install --upgrade pip
-          pip install buildozer cython==0.29.36
+          pip install buildozer 'cython<3.0'
 
       - name: Download Chinese font (backup)
         run: |

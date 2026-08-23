@@ -31,3 +31,8 @@ Thumbs.db
 # Fonts (downloaded during build, not committed)
 fonts/*.otf
 fonts/*.ttf
+
+# Local build artifacts / checks (not for GitHub)
+artifact_APK.tar.gz
+tools/
+wsl_check.txt
