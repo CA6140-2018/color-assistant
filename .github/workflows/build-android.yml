@@ -86,15 +86,41 @@ jobs:
           print('patched kivy python_depends -> []')
           EOF
 
-      - name: Build APK
-        run: buildozer android debug
+      - name: Build APK (release, signed)
         env:
           JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+          RELEASE_KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
+          RELEASE_KEYSTORE_PASS: ${{ secrets.RELEASE_KEYSTORE_PASS }}
+        run: |
+          set -ex
+          # 用 Secret 在 CI 内恢复 keystore 并注入 release 签名配置（密码只经环境变量进 Python，不打印进日志）
+          python3 - <<'EOF'
+          import base64, os
+          open('colorassistant-release.jks','wb').write(
+              base64.b64decode(os.environ['RELEASE_KEYSTORE_B64'].strip()))
+          p = os.environ['RELEASE_KEYSTORE_PASS']
+          spec_path = 'buildozer.spec'
+          text = open(spec_path, encoding='utf-8').read()
+          block = (
+              '\n# --- release signing (injected by CI from secrets) ---\n'
+              'android.keystore = colorassistant-release.jks\n'
+              'android.keyalias = colorassistant\n'
+              'android.storepass = ' + p + '\n'
+              'android.keypass = ' + p + '\n\n'
+          )
+          marker = '[buildozer]'
+          assert marker in text, 'section marker [buildozer] not found'
+          text = text.replace(marker, block + marker, 1)
+          open(spec_path, 'w', encoding='utf-8').write(text)
+          print('keystore restored & signing config injected into [app]')
+          EOF
+          # 构建正式 release 包；Gradle 用该 keystore 通过 apksigner 做 v2 签名
+          buildozer android release
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: colorassistant-debug-apk
+          name: colorassistant-release-apk
           path: bin/*.apk
           retention-days: 30
 
