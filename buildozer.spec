@@ -20,7 +20,7 @@ source.exclude_patterns = requirements.txt, README.md, *.spec.bak
 requirements = python3,kivy==2.3.1
 
 # Android 设置
-android.permissions = CAMERA
+android.permissions = CAMERA, WRITE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE
 android.api = 33
 android.minapi = 24
 android.archs = arm64-v8a

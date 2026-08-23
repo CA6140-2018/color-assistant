@@ -49,6 +49,10 @@ def _is_android():
 
 IS_ANDROID = _is_android()
 
+# 尽早安装崩溃捕获，确保启动/初始化期的异常也能落盘
+import crash_log
+_crash_path = crash_log.install()
+
 # ── OpenCV 可选导入 ──
 try:
     import cv2
@@ -474,6 +478,23 @@ class InfoPanel(ScrollView):
             font_size=dp(12),
         )
 
+    def show_crash_path(self, path):
+        self._clear()
+        self._add_label("[b][color=FFB300]崩溃日志位置[/color][/b]", font_size=dp(16))
+        self._add_label("", size=dp(8))
+        self._add_label(
+            "[color=a0a0a0]应用若异常闪退，日志会自动写入下面这个文件。\n"
+            "请用手机『文件管理』找到它，把内容发给我：[/color]",
+            font_size=dp(12),
+        )
+        self._add_label("", size=dp(8))
+        self._add_label(f"[color=4FC3F7][b]{path}[/b][/color]", font_size=dp(11))
+        self._add_label("", size=dp(8))
+        self._add_label(
+            "[color=a0a0a0]文件可能位置：Download / sdcard 根目录 / 应用专属目录[/color]",
+            font_size=dp(11),
+        )
+
     def show_analysis(self, color: Color):
         self._clear()
 
@@ -607,6 +628,10 @@ class ColorAssistantApp(App):
         btn_clear.bind(on_release=lambda btn: self._on_clear_marks())
         toolbar.add_widget(btn_clear)
 
+        btn_log = Button(text="日志", size_hint=(None, 1), width=dp(56), font_size=dp(13), background_color=(0.25, 0.25, 0.35, 1))
+        btn_log.bind(on_release=lambda btn: self._on_show_crash_path())
+        toolbar.add_widget(btn_log)
+
         self.root.add_widget(toolbar)
 
         self._current_color = None
@@ -646,6 +671,10 @@ class ColorAssistantApp(App):
     def _on_report(self):
         if self._current_color:
             self.info_panel.show_report(self._current_color)
+
+    def _on_show_crash_path(self):
+        """向用户展示崩溃日志写入位置。"""
+        self.info_panel.show_crash_path(_crash_path)
 
     def _on_clear_marks(self):
         for mark in self.camera_view._pick_marks:
