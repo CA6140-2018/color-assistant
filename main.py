@@ -142,8 +142,11 @@ class CameraView(FloatLayout):
             # ── Kivy Camera 模式（Android / 无 OpenCV）──
             from kivy.uix.camera import Camera as KivyCamera
 
+            # play 先保持 False：Android 上若在权限授予前就 play=True，
+            # 打开摄像头硬件会在 API 33+ 直接抛异常导致闪退。
+            # 由 start_camera() 在权限获批后再置 True。
             self.kivy_camera = KivyCamera(
-                play=True,
+                play=False,
                 index=0,
                 allow_stretch=True,
                 keep_ratio=False,
@@ -172,7 +175,13 @@ class CameraView(FloatLayout):
                 self._camera_started = True
                 Clock.schedule_interval(self._update_cv2_frame, 1.0 / 30)
         else:
-            # Kivy Camera 在 __init__ 中已 play=True，只需启动帧更新
+            # 权限已授予后才真正打开摄像头
+            if hasattr(self, "kivy_camera"):
+                try:
+                    self.kivy_camera.play = True
+                except Exception:
+                    # 摄像头打开失败（被占用/无设备），不影响 UI 运行
+                    pass
             self._camera_started = True
             Clock.schedule_interval(self._update_kivy_frame, 1.0 / 30)
 
