@@ -38,6 +38,8 @@ orientation = all
 log_level = 2
 
 # 构建类型
+# release 产物格式：显式设为 apk（默认是 aab；我们需要可直接安装的 APK，并由 gradle apksigner 做 v2 签名）
+android.release_artifact = apk
 # 注：此处不再设置 android.debug_artifact —— 该键在当前 buildozer+p4a 下会把产物路径误当作
 # p4a 子命令传入导致 "invalid choice"；产物命名沿用默认，上传步骤用 bin/*.apk 通配。
 
