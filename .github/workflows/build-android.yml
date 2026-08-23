@@ -65,6 +65,27 @@ jobs:
           restore-keys: |
             android-sdk-ndk-${{ runner.os }}-
 
+      - name: Prepare p4a (strip network deps from kivy recipe)
+        run: |
+          set -ex
+          rm -rf /tmp/p4a
+          git clone --depth 1 --single-branch --branch develop \
+            https://github.com/kivy/python-for-android.git /tmp/p4a
+          # kivy recipe 硬编码 python_depends = [certifi,chardet,idna,requests,urllib3,filetype]，
+          # 其中 requests 会拉进 charset-normalizer>=3（自带编译扩展），p4a 会生成安卓专用 wheel，
+          # 宿主机 pip 安装时报 "not a supported wheel on this platform"（p4a issue #2755）。
+          # 我们的 app 不使用这些网络依赖，直接清空即可避免整条依赖链。
+          python3 - <<'EOF'
+          import re
+          p = '/tmp/p4a/pythonforandroid/recipes/kivy/__init__.py'
+          s = open(p, encoding='utf-8').read()
+          s2 = re.sub(r'python_depends\s*=\s*\[[^\]]*\]',
+                      'python_depends = []', s)
+          assert s2 != s, 'pattern not found'
+          open(p, 'w', encoding='utf-8').write(s2)
+          print('patched kivy python_depends -> []')
+          EOF
+
       - name: Build APK
         run: buildozer android debug
         env:

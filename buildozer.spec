@@ -17,9 +17,7 @@ source.exclude_dirs = __pycache__, .git, build, dist, bin
 source.exclude_patterns = requirements.txt, README.md, *.spec.bak
 
 # 依赖（不包含 opencv 与 numpy，Android 用 Kivy 原生 Camera + 纯 Python 取色，缩短交叉编译）
-# charset-normalizer 固定 2.x（纯 Python）：>=3.0 自带编译扩展，p4a 会生成安卓专用 wheel，
-# 装不进宿主机 venv 导致 "not a supported wheel on this platform"。详见 p4a issue #2755。
-requirements = python3,kivy==2.3.1,charset-normalizer==2.1.1
+requirements = python3,kivy==2.3.1
 
 # Android 设置
 android.permissions = CAMERA
@@ -44,6 +42,8 @@ android.debug_artifact = bin/colorassistant-debug.apk
 
 # p4a 设置（使用 develop 分支以支持 AAB）
 p4a.branch = develop
+# 使用 CI 预置的 p4a 源码（已改 kivy recipe 清空 python_depends，见 workflow），buildozer 不再自行拉取
+p4a.source_dir = /tmp/p4a
 
 # 图标和启动画面（使用默认，可选替换）
 #android.icon = icon.png
