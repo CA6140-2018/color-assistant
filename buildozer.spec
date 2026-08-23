@@ -38,7 +38,8 @@ orientation = all
 log_level = 2
 
 # 构建类型
-android.debug_artifact = bin/colorassistant-debug.apk
+# 注：此处不再设置 android.debug_artifact —— 该键在当前 buildozer+p4a 下会把产物路径误当作
+# p4a 子命令传入导致 "invalid choice"；产物命名沿用默认，上传步骤用 bin/*.apk 通配。
 
 # p4a 设置（使用 develop 分支以支持 AAB）
 p4a.branch = develop
