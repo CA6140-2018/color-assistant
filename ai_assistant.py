@@ -8,7 +8,7 @@ import math
 from dataclasses import dataclass, field
 from typing import List, Tuple, Dict, Optional
 
-from color_engine import Color, Recipe, RecipeFinder, BASE_PIGMENTS, ColorMixer
+from color_engine import Color, Recipe, RecipeFinder, BASE_PIGMENTS, ColorMixer, pigment_description
 
 
 # ──────────────────────────────────────────────
@@ -306,7 +306,9 @@ class ColorAdvisor:
         for i, recipe in enumerate(recipes, 1):
             lines.append(f"  方案 {i}（{recipe.accuracy}，ΔE={recipe.delta_e:.2f}）:")
             for name, c, ratio in recipe.components:
-                lines.append(f"    {name} {c.hex} → {ratio:.1f}%")
+                desc = pigment_description(name)
+                suffix = f"（{desc}）" if desc else ""
+                lines.append(f"    {name} {c.hex} → {ratio:.1f}% {suffix}")
             lines.append(f"    混合结果: {recipe.result.hex}")
             lines.append("")
 

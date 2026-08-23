@@ -222,18 +222,30 @@ class Pigment:
     color: Color
     # 中文别名
     aliases: List[str] = field(default_factory=list)
+    # 用途说明（用于配方展示）
+    description: str = ""
 
 
 BASE_PIGMENTS: List[Pigment] = [
-    Pigment("钛白", Color(255, 255, 255), ["白色", "白"]),
-    Pigment("炭黑", Color(0, 0, 0), ["黑色", "黑"]),
-    Pigment("大红", Color(220, 40, 40), ["红色", "红", "朱红"]),
-    Pigment("柠檬黄", Color(255, 220, 30), ["黄色", "黄"]),
-    Pigment("群青", Color(40, 60, 200), ["蓝色", "蓝"]),
-    Pigment("翠绿", Color(30, 160, 60), ["绿色", "绿"]),
-    Pigment("紫色", Color(130, 40, 160), ["紫"]),
-    Pigment("橙色", Color(255, 140, 30), ["橙"]),
+    Pigment("钛白", Color(255, 255, 255), ["白色", "白"], "白色颜料，提亮明度、冲淡其他颜色"),
+    Pigment("炭黑", Color(0, 0, 0), ["黑色", "黑"], "黑色颜料，压暗明度、加深阴影"),
+    Pigment("大红", Color(220, 40, 40), ["红色", "红", "朱红"], "红色颜料，营造暖色基调"),
+    Pigment("柠檬黄", Color(255, 220, 30), ["黄色", "黄"], "黄色颜料，提亮并增添明快氛围"),
+    Pigment("群青", Color(40, 60, 200), ["蓝色", "蓝"], "蓝色颜料，营造冷色基调"),
+    Pigment("翠绿", Color(30, 160, 60), ["绿色", "绿"], "绿色颜料，营造自然清新感"),
+    Pigment("紫色", Color(130, 40, 160), ["紫"], "紫色颜料，营造典雅神秘氛围"),
+    Pigment("橙色", Color(255, 140, 30), ["橙"], "橙色颜料，营造活力温暖气氛"),
 ]
+
+# 颜料名 → 用途说明映射（配方展示用）
+PIGMENT_DESCRIPTIONS: Dict[str, str] = {
+    p.name: p.description for p in BASE_PIGMENTS
+}
+
+
+def pigment_description(name: str) -> str:
+    """按颜料名返回用途说明，未匹配时返回空串。"""
+    return PIGMENT_DESCRIPTIONS.get(name, "")
 
 
 # ──────────────────────────────────────────────

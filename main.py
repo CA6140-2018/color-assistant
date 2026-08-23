@@ -86,6 +86,7 @@ from color_engine import (
     ColorMixer,
     average_color_region,
     extract_dominant_color,
+    pigment_description,
 )
 from ai_assistant import ColorAdvisor, nearest_named_color
 
@@ -498,9 +499,13 @@ class InfoPanel(ScrollView):
                 font_size=dp(12),
                 color=(0.85, 0.85, 0.85, 1),
             )
-            parts_text = " + ".join(f"{name} {ratio:.0f}%" for name, _, ratio in recipe.components)
             self._add_swatch(recipe.result, f"混合 → {recipe.result.hex}")
-            self._add_label(f"  {parts_text}", font_size=dp(11), color=(0.7, 0.7, 0.7, 1))
+            for name, _, ratio in recipe.components:
+                desc = pigment_description(name)
+                line = f"  {name} {ratio:.0f}%"
+                if desc:
+                    line += f" （{desc}）"
+                self._add_label(line, font_size=dp(11), color=(0.7, 0.7, 0.7, 1))
             self._add_label("", size=dp(4))
 
         self._add_label("[b][color=CE93D8]和谐配色[/color][/b]", font_size=dp(14))
