@@ -105,6 +105,7 @@ from color_engine import (
     WhiteBalance,
 )
 from ai_assistant import ColorAdvisor, nearest_named_color
+from paint_library import best_match
 
 
 # ──────────────────────────────────────────────
@@ -566,6 +567,12 @@ class InfoPanel(ScrollView):
         self._add_label("[b][color=4FC3F7]采集颜色[/color][/b]", font_size=dp(16))
         self._add_swatch(color, f"{analysis.hex_code}  「{analysis.name}」")
 
+        if analysis.paint_matches:
+            self._add_label("", size=dp(6))
+            self._add_label("[b][color=FFD54F]商用色卡匹配[/color][/b]", font_size=dp(14))
+            for m in analysis.paint_matches[:5]:
+                self._add_swatch(m.color, f"{m.display}  ΔE={m.delta_e:.1f}")
+
         self._add_label("", size=dp(6))
 
         self._add_label("[b]色值数据[/b]", font_size=dp(14), color=(0.8, 0.8, 0.8, 1))
@@ -846,6 +853,13 @@ class AiMixScreen(BoxLayout):
         row.add_widget(self.current_block)
         self.info_box.add_widget(row)
 
+        # 目标色卡匹配
+        self.card_lbl = Label(
+            text="目标色卡：--", size_hint_y=None, height=dp(18),
+            font_size=dp(11), color=(0.7, 0.85, 1, 1),
+        )
+        self.info_box.add_widget(self.card_lbl)
+
         # 色差
         self.delta_lbl = Label(
             text="ΔE 色差：--", size_hint_y=None, height=dp(22),
@@ -957,7 +971,8 @@ class AiMixScreen(BoxLayout):
             return
         self._target_raw = color
         self._target = self.wb.apply(color)
-        self.target_block.set_color(self._target, self.advisor.analyze(self._target).name)
+        self.target_block.set_color(self._target, nearest_named_color(self._target))
+        self._update_card_lbl()
         # 对焦框画在准星位置（CameraView 已把准星移到点击处，坐标与 cam_area 一致）
         try:
             ch = self.camera_view.crosshair
@@ -994,12 +1009,24 @@ class AiMixScreen(BoxLayout):
             # 校色改变后重算目标色
             if self._target is not None and self._target_raw is not None:
                 self._target = self.wb.apply(self._target_raw)
-                self.target_block.set_color(self._target, self.advisor.analyze(self._target).name)
+                self.target_block.set_color(self._target, nearest_named_color(self._target))
+                self._update_card_lbl()
         except Exception:
             self._set_status("校色失败")
 
     def _set_status(self, text):
         self.bar_status.text = text
+
+    def _update_card_lbl(self):
+        """刷新目标色的商用色卡匹配显示。"""
+        if self._target is None:
+            self.card_lbl.text = "目标色卡：--"
+            return
+        m = best_match(self._target)
+        if m is None:
+            self.card_lbl.text = "目标色卡：--"
+        else:
+            self.card_lbl.text = f"目标色卡：{m.display}  ΔE={m.delta_e:.1f}"
 
     # ── 实时轮询 ──
 
@@ -1009,7 +1036,7 @@ class AiMixScreen(BoxLayout):
         corrected, _ = self._center_color()
         if corrected is None:
             return
-        self.current_block.set_color(corrected, self.advisor.analyze(corrected).name)
+        self.current_block.set_color(corrected, nearest_named_color(corrected))
 
         if self._target is not None:
             de = self._target.distance(corrected)

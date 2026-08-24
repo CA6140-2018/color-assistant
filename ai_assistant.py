@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import List, Tuple, Dict, Optional
 
 from color_engine import Color, Recipe, RecipeFinder, BASE_PIGMENTS, ColorMixer, pigment_description
+from paint_library import find_closest as find_paint_closest
 
 
 # ──────────────────────────────────────────────
@@ -75,6 +76,7 @@ class ColorAnalysis:
     saturation_level: str  # 高 / 中等 / 低
     mood: str              # 色彩心理
     description: str       # 完整文字描述
+    paint_matches: List = field(default_factory=list)  # 商用色卡匹配(PaintMatch 列表)
 
 
 def nearest_named_color(color: Color) -> str:
@@ -186,13 +188,21 @@ class ColorAdvisor:
         bright = brightness_level(color)
         sat = saturation_level(color)
         mood = color_mood(color)
+        paint_matches = sorted(
+            find_paint_closest(color, "RAL", top_n=3)
+            + find_paint_closest(color, "传统色", top_n=2),
+            key=lambda m: m.delta_e,
+        )
 
         desc_parts = [
             f"该颜色为{self._hue_name(h)}系",
             f"{temp}，{bright}，{sat}",
             f"最接近的色彩名称为「{name}」",
-            f"色彩感受：{mood}",
         ]
+        if paint_matches:
+            best = paint_matches[0]
+            desc_parts.append(f"最接近的商用色卡为「{best.display}」(ΔE {best.delta_e:.1f})")
+        desc_parts.append(f"色彩感受：{mood}")
 
         return ColorAnalysis(
             color=color,
@@ -208,6 +218,7 @@ class ColorAdvisor:
             saturation_level=sat,
             mood=mood,
             description="，".join(desc_parts) + "。",
+            paint_matches=paint_matches,
         )
 
     def suggest_recipe(self, target: Color, top_n: int = 3) -> List[Recipe]:
@@ -323,6 +334,14 @@ class ColorAdvisor:
         lines.append(f"  色彩感受: {analysis.mood}")
         lines.append(f"  {analysis.description}")
         lines.append("")
+
+        # 色卡匹配
+        if analysis.paint_matches:
+            lines.append("【商用色卡匹配】")
+            for m in analysis.paint_matches:
+                extra = f"  {m.description}" if m.description else ""
+                lines.append(f"  {m.display}  {m.color.hex}  ΔE={m.delta_e:.1f}{extra}")
+            lines.append("")
 
         # 调色配方
         lines.append("【调色配方推荐】")

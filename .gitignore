@@ -34,7 +34,8 @@ fonts/*.ttf
 
 # Local build artifacts / checks (not for GitHub)
 artifact_APK.tar.gz
-tools/
+tools/*
+!tools/gen_paint_library.py
 wsl_check.txt
 
 # Pigment config (generated at first run per device)
