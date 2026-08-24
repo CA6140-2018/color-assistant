@@ -91,6 +91,7 @@ from color_engine import (
     average_color_region,
     extract_dominant_color,
     pigment_description,
+    WhiteBalance,
 )
 from ai_assistant import ColorAdvisor, nearest_named_color
 
@@ -579,6 +580,305 @@ class InfoPanel(ScrollView):
 
 
 # ──────────────────────────────────────────────
+# AI 辅助调色横屏界面
+# ──────────────────────────────────────────────
+
+class AiMixScreen(BoxLayout):
+    """AI 辅助调色模式。
+
+    横屏一分为二：
+      - 左半屏「目标色」：点一下锁定/更新目标色（冻结当前帧中心附近）
+      - 右半屏「当前色浆」：实时读取帧中心采样，实时显示
+    底部给出 当前色浆 vs 目标色 的色差与「下一步加什么颜色」建议。
+    复用传入的 CameraView 帧，不新增摄像头。所有颜色先过白卡校色。
+    """
+
+    def __init__(self, camera_view, **kwargs):
+        super().__init__(**kwargs)
+        self.orientation = "vertical"
+        self.spacing = dp(0)
+        self.camera_view = camera_view
+        self.advisor = ColorAdvisor()
+        self.wb = WhiteBalance()
+
+        self._target = None       # 目标色（校正后 Color）
+        self._target_raw = None   # 目标色原始采样
+        self._sampling_interval = None
+        self._mix_init_prompt = True
+
+        self._build_ui()
+
+    def _build_ui(self):
+        # 顶部返回/标题栏
+        bar = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(8), padding=dp(6))
+        with bar.canvas.before:
+            GraphicsColor(0.13, 0.13, 0.16, 1)
+            self._bar_bg = Rectangle(pos=bar.pos, size=bar.size)
+        bar.bind(pos=self._resize_bar, size=self._resize_bar)
+
+        self.btn_back = Button(
+            text="← 返回", size_hint=(None, 1), width=dp(64),
+            font_size=dp(13), background_color=(0.4, 0.25, 0.2, 1),
+        )
+        self.btn_back.bind(on_release=lambda b: self.close())
+        bar.add_widget(self.btn_back)
+
+        self.bar_title = Label(
+            text="AI 辅助调色", size_hint=(1, 1),
+            font_size=dp(15), color=(1, 1, 1, 1), bold=True,
+        )
+        bar.add_widget(self.bar_title)
+
+        self.btn_cal = Button(
+            text="白卡校色", size_hint=(None, 1), width=dp(72),
+            font_size=dp(12), background_color=(0.2, 0.5, 0.45, 1),
+        )
+        self.btn_cal.bind(on_release=lambda b: self._do_calibrate())
+        bar.add_widget(self.btn_cal)
+
+        self.bar_status = Label(
+            text="", size_hint=(None, 1), width=dp(64),
+            font_size=dp(11), color=(0.7, 0.9, 0.7, 1),
+        )
+        bar.add_widget(self.bar_status)
+
+        # 顶栏（BoxLayout 垂直排列在第一行）
+        bar.size_hint = (1, None)
+        bar.height = dp(44)
+        self.add_widget(bar)
+
+        # 主体左右分栏（弹性占据中间）
+        body = BoxLayout(orientation="horizontal", spacing=1, padding=dp(2))
+        body.size_hint = (1, 1)
+        self.add_widget(body)
+
+        # 左栏：目标色
+        self.left_panel = BoxLayout(orientation="vertical", spacing=dp(4), padding=dp(8))
+        lbl_target = Label(
+            text="目标色（点下图锁定）", size_hint=(1, None), height=dp(26),
+            font_size=dp(13), color=(0.55, 0.8, 1, 1), bold=True,
+        )
+        self.left_panel.add_widget(lbl_target)
+
+        self.left_swatch = Label(
+            text="等待点击锁定目标色\n\n对准画面点击即可", size_hint=(1, 0.55),
+            font_size=dp(13), color=(0.6, 0.6, 0.6, 1), halign="center", valign="middle",
+        )
+        self.left_swatch.bind(size=lambda i, v: setattr(i, "text_size", i.size))
+        self.left_panel.add_widget(self.left_swatch)
+        self.left_swatch.bind(on_touch_down=lambda w, t: self._on_left_touch(w, t) if w.collide_point(*t.pos) else None)
+
+        self.left_info = Label(
+            text="", size_hint=(1, None), height=dp(40),
+            font_size=dp(12), color=(0.85, 0.85, 0.85, 1),
+            halign="left", valign="middle",
+        )
+        self.left_info.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
+        self.left_panel.add_widget(self.left_info)
+
+        # 右栏：当前色浆 + 建议
+        self.right_panel = BoxLayout(orientation="vertical", spacing=dp(4), padding=dp(8))
+        lbl_mix = Label(
+            text="当前色浆（实时）", size_hint=(1, None), height=dp(26),
+            font_size=dp(13), color=(0.7, 1, 0.7, 1), bold=True,
+        )
+        self.right_panel.add_widget(lbl_mix)
+
+        self.right_swatch = Label(
+            text="实时采样中…\n请将色浆对准画面中心",
+            size_hint=(1, 0.55), font_size=dp(13), color=(0.6, 0.6, 0.6, 1),
+            halign="center", valign="middle",
+        )
+        self.right_swatch.bind(size=lambda i, v: setattr(i, "text_size", i.size))
+        self.right_panel.add_widget(self.right_swatch)
+
+        self.right_info = Label(
+            text="", size_hint=(1, None), height=dp(40),
+            font_size=dp(12), color=(0.85, 0.85, 0.85, 1),
+            halign="left", valign="middle",
+        )
+        self.right_info.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
+        self.right_panel.add_widget(self.right_info)
+
+        body.add_widget(self.left_panel)
+        body.add_widget(self.right_panel)
+
+        # 底部建议区
+        self.advice = Label(
+            text="请先在左侧锁定目标色，然后把正在调的色浆对准画面中心，\n"
+                 "这里会实时给出色差和「下一步加什么颜色」。",
+            size_hint=(1, None), height=dp(96),
+            font_size=dp(13), color=(1, 1, 1, 1), halign="center", valign="middle",
+        )
+        self.advice.size_hint = (1, None)
+        self.advice.height = dp(96)
+        self.advice.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
+        self.add_widget(self.advice)
+
+    def _resize_bar(self, inst, val):
+        self._bar_bg.pos = inst.pos
+        self._bar_bg.size = inst.size
+
+    def open(self, on_close=None):
+        self.on_close = on_close or (lambda: None)
+        self._mix_init_prompt = True
+        Window.set_system_cursor("wait")  # no-op 安全
+        # 启动实时采样
+        self._sampling_interval = Clock.schedule_interval(self._poll, 1.0 / 15)
+        # 目标色初始化为画面中心（若有画面）
+        if self.camera_view is not None and self.camera_view._frame is not None:
+            self._do_capture_target()
+
+    def close(self):
+        if self._sampling_interval is not None:
+            Clock.unschedule(self._sampling_interval)
+            self._sampling_interval = None
+        if self.on_close:
+            self.on_close()
+
+    def shutdown(self):
+        self.close()
+
+    # ── 取色 ──
+
+    def _center_color(self, radius=12):
+        """从当前帧中心采样（原始），返回校正后颜色与原始颜色。"""
+        if self.camera_view is None or self.camera_view._frame is None:
+            return None, None
+        h, w = self.camera_view._frame.shape[:2]
+        raw = average_color_region(self.camera_view._frame, (w // 2, h // 2), radius=radius)
+        return self.wb.apply(raw), raw
+
+    def _do_capture_target(self):
+        """从画面中心锁定为目标色（限左栏）。"""
+        corrected, raw = self._center_color()
+        if corrected is None:
+            return False
+        self._target = corrected
+        self._target_raw = raw
+        self._mix_init_prompt = False
+        self._render(force=True)
+        return True
+
+    def _on_left_touch(self, widget, touch):
+        if touch.is_double_tap:
+            return False
+        # 在左栏点击即锁定为新的目标色
+        if self._do_capture_target():
+            return True
+        return False
+
+    # ── 校色 ──
+
+    def _do_calibrate(self):
+        """把画面中心对标准灰卡采样作为校色基准。"""
+        raw = None
+        if self.camera_view is not None and self.camera_view._frame is not None:
+            h, w = self.camera_view._frame.shape[:2]
+            raw = average_color_region(self.camera_view._frame, (w // 2, h // 2), radius=15)
+        if raw is None:
+            self._set_status("无画面")
+            return
+        try:
+            self.wb.calibrate(raw)  # 名义默认中性灰
+            self._set_status("已校色")
+            # 校色可能改变目标色与当前色浆，重算
+            if self._target is not None:
+                self._target = self.wb.apply(self._target_raw)
+            self._render(force=True)
+        except Exception as e:
+            self._set_status("校色失败")
+
+    def _set_status(self, text):
+        self.bar_status.text = text
+
+    # ── 实时轮询 ──
+
+    def _poll(self, dt):
+        if self.camera_view is None:
+            return
+        self._render(force=False)
+
+    def _render(self, force=False):
+        corrected, raw = self._center_color()
+
+        # 当前色浆（右栏）实时更新
+        if corrected is not None:
+            self._draw_swatch(self.right_swatch, corrected)
+            self.right_info.text = (
+                f"色浆  {corrected.hex}   {self.advisor.analyze(corrected).name}\n"
+                f"RGB {corrected.rgb[0]},{corrected.rgb[1]},{corrected.rgb[2]}"
+            )
+        else:
+            self.right_swatch.text = "无画面"
+            self.right_info.text = ""
+
+        # 目标色（左栏）
+        if self._target is not None:
+            self._draw_swatch(self.left_swatch, self._target)
+            self.left_info.text = f"目标  {self._target.hex}   {self.advisor.analyze(self._target).name}"
+
+        # 建议
+        self._render_advice()
+
+    def _draw_swatch(self, widget, color):
+        """用纯色矩形背景实时画出色块。"""
+        widget._sw_col = color
+        r, g, b = color.rgb_normalized
+        if not hasattr(widget, "_sw_drawn"):
+            widget.bind(pos=self._redraw_swatch, size=self._redraw_swatch)
+            widget._sw_drawn = True
+        widget.canvas.clear()
+        with widget.canvas:
+            GraphicsColor(r, g, b, 1)
+            Rectangle(pos=widget.pos, size=widget.size)
+            GraphicsColor(0, 0, 0, 0.35)
+            Line(rectangle=(widget.x, widget.y, widget.width, widget.height), width=1)
+        widget.text = color.hex
+        widget.color = (1, 1, 1, 1) if (r + g + b) < 1.2 else (0, 0, 0, 1)
+
+    def _redraw_swatch(self, inst, val):
+        col = getattr(inst, "_sw_col", None)
+        if col is None:
+            return
+        r, g, b = col.rgb_normalized
+        inst.canvas.clear()
+        with inst.canvas:
+            GraphicsColor(r, g, b, 1)
+            Rectangle(pos=inst.pos, size=inst.size)
+            GraphicsColor(0, 0, 0, 0.35)
+            Line(rectangle=(inst.x, inst.y, inst.width, inst.height), width=1)
+
+    def _render_advice(self):
+        if self._target is None:
+            if self._mix_init_prompt:
+                self.advice.text = "请在左侧点击锁定目标色\n然后把正在调的色浆对准画面中心"
+            else:
+                self.advice.text = "目标色已锁定\n请将色浆对准画面中心，实时看下一步建议"
+            return
+
+        corrected, _ = self._center_color()
+        if corrected is None:
+            return
+
+        de = self._target.distance(corrected)
+        if de <= 2.0:
+            self.advice.text = (
+                f"✓ 当前色浆已非常接近目标（ΔE={de:.1f}）\n"
+                "基本到位，可再微调或暂存。"
+            )
+            return
+
+        suggestion = self.advisor.suggest_adjustment(corrected, self._target)
+        # suggest_adjustment 返回已带"调整建议：\n  • xxx"格式
+        self.advice.text = (
+            f"目标 {self._target.hex}   当前 {corrected.hex}   ΔE={de:.1f}\n"
+            f"{suggestion}\n"
+            f"{self.wb.describe()}"
+        )
+
+
+# ──────────────────────────────────────────────
 # 主界面
 # ──────────────────────────────────────────────
 
@@ -648,6 +948,10 @@ class ColorAssistantApp(App):
         btn_dominant.bind(on_release=lambda btn: self._on_dominant_pick())
         toolbar.add_widget(btn_dominant)
 
+        btn_ai = Button(text="AI辅助调色", size_hint=(1, 1), font_size=dp(13), background_color=(0.55, 0.3, 0.65, 1))
+        btn_ai.bind(on_release=lambda btn: self._on_open_mix())
+        toolbar.add_widget(btn_ai)
+
         btn_clear = Button(text="清除标记", size_hint=(None, 1), width=dp(80), font_size=dp(13), background_color=(0.4, 0.2, 0.2, 1))
         btn_clear.bind(on_release=lambda btn: self._on_clear_marks())
         toolbar.add_widget(btn_clear)
@@ -659,6 +963,7 @@ class ColorAssistantApp(App):
         self.root.add_widget(toolbar)
 
         self._current_color = None
+        self.mix_screen = None
 
         # 启动摄像头（Android 需先请求权限）
         Clock.schedule_once(self._init_camera, 1.0)
@@ -705,6 +1010,26 @@ class ColorAssistantApp(App):
             self.camera_view.remove_widget(mark)
         self.camera_view._pick_marks.clear()
 
+    # ── AI 辅助调色 ──
+
+    def _on_open_mix(self):
+        """打开 AI 辅助调色横屏界面。"""
+        if self.mix_screen is not None:
+            return
+        self.mix_screen = AiMixScreen(camera_view=self.camera_view)
+        # 全屏覆盖
+        self.mix_screen.size_hint = (1, 1)
+        self.root.add_widget(self.mix_screen)
+        self.mix_screen.open(on_close=self._on_close_mix)
+
+    def _on_close_mix(self):
+        """关闭 AI 辅助调色界面，回到主界面。"""
+        if self.mix_screen is None:
+            return
+        self.mix_screen.shutdown()
+        self.root.remove_widget(self.mix_screen)
+        self.mix_screen = None
+
     # ── 背景 ──
 
     def _update_title_bg(self, instance, value):
@@ -719,6 +1044,8 @@ class ColorAssistantApp(App):
 
     def on_pause(self):
         self.camera_view.stop_camera()
+        if self.mix_screen is not None:
+            self._on_close_mix()
         return True
 
     def on_resume(self):
@@ -726,6 +1053,8 @@ class ColorAssistantApp(App):
 
     def on_stop(self):
         self.camera_view.stop_camera()
+        if self.mix_screen is not None:
+            self._on_close_mix()
 
 
 if __name__ == "__main__":

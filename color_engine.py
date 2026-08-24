@@ -678,3 +678,77 @@ def average_color_region(image: Frame, center: Tuple[int, int], radius: int = 10
         max(0, min(255, int(round(sg / m)))),
         max(0, min(255, int(round(sb / m)))),
     )
+
+
+# ──────────────────────────────────────────────
+# 白卡颜色补偿（环境校色）
+# ──────────────────────────────────────────────
+
+class WhiteBalance:
+    """基于白卡/灰卡的相机颜色补偿。
+
+    用户在受控灯光下把相机对准一张已知标准灰卡/白卡并采样，
+    记录该卡在镜头下的实测 RGB。之后所有采集颜色都按
+    实测/标准 的通道比例做增益校正，抵消灯光色温带来的偏差。
+
+    参考白点默认sRGB标准白 (255,255,255)，也可用灰卡标准值自定义。
+    """
+
+    # 参考白点：标准灰卡的期望 RGB（默认中性灰 #808080，抗过曝）
+    NOMINAL = (128, 128, 128)
+
+    def __init__(self):
+        self._gain = None  # (gr, gg, gb) 每通道增益
+        self._ref_sample = None  # 最近一次校色采样（原始 RGB）
+        self._ref_nominal = None  # 对应名义值
+
+    @property
+    def is_calibrated(self) -> bool:
+        return self._gain is not None
+
+    def calibrate(self, measured: Color, nominal: Optional[Tuple[int, int, int]] = None):
+        """用实测颜色标定。
+
+        measured: 相机对着标准卡测得的颜色（需先做灰卡区域平均）
+        nominal: 该标准卡的期望 RGB；默认中性灰(128,128,128)
+        """
+        nom = list(nominal or self.NOMINAL)
+        mr, mg, mb = measured.rgb
+        # 避免除以0
+        gr = nom[0] / mr if mr > 0 else 1.0
+        gg = nom[1] / mg if mg > 0 else 1.0
+        gb = nom[2] / mb if mb > 0 else 1.0
+        # 限制增益范围，防止噪点放大过大
+        self._gain = (
+            max(0.4, min(2.5, gr)),
+            max(0.4, min(2.5, gg)),
+            max(0.4, min(2.5, gb)),
+        )
+        self._ref_sample = (measured.r, measured.g, measured.b)
+        self._ref_nominal = tuple(nom)
+        return self._gain
+
+    def reset(self):
+        self._gain = None
+        self._ref_sample = None
+        self._ref_nominal = None
+
+    def apply(self, color: Color) -> Color:
+        """对颜色应用补偿，返回校正后的新 Color。"""
+        if self._gain is None:
+            return color
+        r = color.r * self._gain[0]
+        g = color.g * self._gain[1]
+        b = color.b * self._gain[2]
+        return Color(
+            max(0, min(255, int(round(r)))),
+            max(0, min(255, int(round(g)))),
+            max(0, min(255, int(round(b)))),
+        )
+
+    def describe(self) -> str:
+        """返回当前校色状态描述。"""
+        if self._gain is None:
+            return "未校色"
+        gr, gg, gb = self._gain
+        return f"已校色 (增益 R×{gr:.2f} G×{gg:.2f} B×{gb:.2f})"
