@@ -107,26 +107,31 @@ jobs:
           # 定位 SDK 自带 apksigner（buildozer 已安装 SDK/build-tools）
           APKSIGNER=$(ls -d ~/.buildozer/android/platform/android-sdk/build-tools/*/ | tail -1)apksigner
           echo "Using apksigner: $APKSIGNER"
-          UNSIGNED=bin/colorassistant-1.0.0-arm64-v8a-release-unsigned.apk
+          UNSIGNED=$(ls bin/*-arm64-v8a-release-unsigned.apk | head -1)
+          echo "Unsigned APK: $UNSIGNED"
           ls -l "$UNSIGNED"
           # 对 unsigned APK 做 v2+v3 签名（apksigner 自动对齐，比 jarsigner 更稳）
+          # 版本号 = 1.1 + Git 短哈希，保证每个版本产物名不同、可溯源
+          SHORT_SHA=$(echo "$GITHUB_SHA" | cut -c1-7)
+          VER="1.1-$SHORT_SHA"
           "$APKSIGNER" sign \
             --ks colorassistant-release.jks \
             --ks-key-alias colorassistant \
             --ks-pass "pass:$RELEASE_KEYSTORE_PASS" \
             --key-pass "pass:$RELEASE_KEYSTORE_PASS" \
-            --out bin/colorassistant-1.0.0-release-signed.apk \
+            --out "bin/colorassistant-${VER}-release-signed.apk" \
             "$UNSIGNED"
           # 移除 unsigned 产物，避免上传误用
           rm -f "$UNSIGNED"
           # 校验签名并打印证书信息
-          "$APKSIGNER" verify --print-certs bin/colorassistant-1.0.0-release-signed.apk
-          echo "=== Signed APK ready ==="
+          "$APKSIGNER" verify --print-certs "bin/colorassistant-${VER}-release-signed.apk"
+          echo "SIGNED_APK=$VER" >> "$GITHUB_ENV"
+          echo "=== Signed APK ready ($VER) ==="
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: colorassistant-release-apk
+          name: colorassistant-${{ env.SIGNED_APK }}
           path: bin/*.apk
           retention-days: 30
 
