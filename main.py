@@ -191,8 +191,11 @@ class CameraView(FloatLayout):
                     c.size_hint = (1, 1)
                     self.add_widget(c)
                     self.kivy_camera = c
-                except Exception:
+                    crash_log.write_crash("[camera] KivyCamera created ok, play=True\n")
+                except Exception as e:
                     # 摄像头打开失败（被占用/权限被拒/无设备），界面仍可用
+                    import traceback as _tb
+                    crash_log.write_crash("[camera] KivyCamera create FAILED: %s\n%s\n" % (e, _tb.format_exc()))
                     self.kivy_camera = None
             self._camera_started = True
             Clock.schedule_interval(self._update_kivy_frame, 1.0 / 30)
@@ -253,6 +256,17 @@ class CameraView(FloatLayout):
 
         tex = self.kivy_camera.texture
         if tex is None:
+            # 只记录一次，避免刷屏；用于诊断"创建成功但没出画面"
+            if not getattr(self, "_tex_none_logged", False):
+                self._tex_none_logged = True
+                crash_log.write_crash(
+                    "[camera] texture is None, camera.index=%s play=%s "
+                    "provider=%s\n" % (
+                        getattr(self.kivy_camera, "index", "?"),
+                        getattr(self.kivy_camera, "play", "?"),
+                        getattr(self.kivy_camera, "play_pos", "?"),
+                    )
+                )
             return
 
         w, h = tex.size
