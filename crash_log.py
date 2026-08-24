@@ -6,10 +6,11 @@ Android 上普通 App 无法读取其他应用日志（Android 11+），Logcat R
 写入外部存储，用户可自行打开读取或发送出来。
 
 写入路径优先级（写到第一个成功的位置，方便用户从文件管理器查看）：
-  1. /sdcard/Download/crash_log.txt
-  2. /sdcard/crash_log.txt
-  3. android App 私有外部目录
-  4. 应用私有目录（保底）
+  1. 应用专属外部目录 getExternalFilesDir()  —— 无需权限必然可写。
+     Android 11+ 分区存储下必须用它（/sdcard 根目录应用无权写入）。
+     用户可在文件管理器『内部存储/Android/data/<包名>/files/』看到。
+  2. Android 常见外部存储根（Download/根目录，作为附加尝试）
+  3. 应用私有目录（保底）
 """
 
 import os
@@ -18,10 +19,28 @@ import traceback
 import time
 
 
+def _get_android_dir():
+    """返回应用专属外部目录的绝对路径（无需任何权限，必然可写）。"""
+    try:
+        from jnius import autoclass
+        activity = autoclass("org.kivy.android.PythonActivity").mActivity
+        files_dir = activity.getExternalFilesDir(None)
+        if files_dir is not None:
+            return os.path.join(files_dir.getAbsolutePath(), "crash_log.txt")
+    except Exception:
+        pass
+    return None
+
+
 def _candidate_paths():
     paths = []
 
-    # Android 常见外部存储根
+    # 1) 应用专属外部目录（首选）
+    d = _get_android_dir()
+    if d:
+        paths.append(d)
+
+    # 2) Android 常见外部存储根（仅作为附加尝试，分区存储下可能失败）
     for base in ("/sdcard", "/storage/emulated/0"):
         if os.path.isdir(base):
             dl = os.path.join(base, "Download")
@@ -29,19 +48,7 @@ def _candidate_paths():
                 paths.append(os.path.join(dl, "crash_log.txt"))
             paths.append(os.path.join(base, "crash_log.txt"))
 
-    # Android 应用专属外部目录（无需额外权限，文件管理器可见度因机型而异）
-    try:
-        from kivy.utils import platform
-        if platform == "android":
-            from jnius import autoclass
-            Environment = autoclass("android.os.Environment")
-            ext = Environment.getExternalStorageDirectory().getAbsolutePath()
-            if os.path.isdir(ext):
-                paths.append(os.path.join(ext, "crash_log.txt"))
-    except Exception:
-        pass
-
-    # 应用私有外部 / 私有数据目录（保底）
+    # 3) 应用私有目录（保底）
     try:
         from kivy.app import App
         app = App.get_running_app()
