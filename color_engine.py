@@ -6,6 +6,8 @@
 
 import math
 import colorsys
+import json
+import os
 from dataclasses import dataclass, field
 from typing import List, Tuple, Dict, Optional
 
@@ -226,7 +228,7 @@ class Pigment:
     description: str = ""
 
 
-BASE_PIGMENTS: List[Pigment] = [
+_DEFAULT_PIGMENTS: List[Pigment] = [
     Pigment("钛白", Color(255, 255, 255), ["白色", "白"], "白色颜料，提亮明度、冲淡其他颜色"),
     Pigment("炭黑", Color(0, 0, 0), ["黑色", "黑"], "黑色颜料，压暗明度、加深阴影"),
     Pigment("大红", Color(220, 40, 40), ["红色", "红", "朱红"], "红色颜料，营造暖色基调"),
@@ -236,6 +238,66 @@ BASE_PIGMENTS: List[Pigment] = [
     Pigment("紫色", Color(130, 40, 160), ["紫"], "紫色颜料，营造典雅神秘氛围"),
     Pigment("橙色", Color(255, 140, 30), ["橙"], "橙色颜料，营造活力温暖气氛"),
 ]
+
+PIGMENTS_CONFIG_NAME = "pigments.json"
+
+
+def _pigment_config_paths() -> List[str]:
+    """基色配置文件候选路径：优先 Android 应用外部目录（用户可用文件管理器编辑）。"""
+    paths = []
+    try:
+        from jnius import autoclass
+        activity = autoclass("org.kivy.android.PythonActivity").mActivity
+        files_dir = activity.getExternalFilesDir(None)
+        if files_dir is not None:
+            paths.append(os.path.join(files_dir.getAbsolutePath(), PIGMENTS_CONFIG_NAME))
+    except Exception:
+        pass
+    paths.append(PIGMENTS_CONFIG_NAME)  # 桌面：当前目录
+    return paths
+
+
+def _dump_default_config():
+    data = [
+        {"name": p.name, "rgb": list(p.color.rgb), "description": p.description}
+        for p in _DEFAULT_PIGMENTS
+    ]
+    for path in _pigment_config_paths():
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _load_pigments() -> List[Pigment]:
+    """从配置文件加载基色列表；首次运行生成默认配置文件。"""
+    for path in _pigment_config_paths():
+        try:
+            if os.path.isfile(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                pigments = []
+                for item in data:
+                    r, g, b = item["rgb"]
+                    pigments.append(
+                        Pigment(
+                            name=str(item["name"]),
+                            color=Color(int(r), int(g), int(b)),
+                            description=str(item.get("description", "")),
+                        )
+                    )
+                if pigments:
+                    return pigments
+        except Exception:
+            continue
+    _dump_default_config()
+    return list(_DEFAULT_PIGMENTS)
+
+
+BASE_PIGMENTS: List[Pigment] = _load_pigments()
 
 # 颜料名 → 用途说明映射（配方展示用）
 PIGMENT_DESCRIPTIONS: Dict[str, str] = {

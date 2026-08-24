@@ -251,6 +251,29 @@ class ColorAdvisor:
 
         return "调整建议：\n" + "\n".join(f"  • {s}" for s in suggestions)
 
+    def suggest_next_pigment(self, current: Color, target: Color) -> Optional[dict]:
+        """搜索"下一步加入哪种基色颜料、加多少"的最优单颜料方案。
+
+        在基色库中穷举（颜料 × 比例），按减色混合模型找出 ΔE 最小的方案。
+        返回 {"pigment": Pigment, "ratio": 0-1, "mixed": 预计混合色, "delta_e": 预计ΔE}，
+        若任何添加都无法改善（ΔE 不下降）返回 None。
+        """
+        from color_engine import ColorMixer
+
+        pigments = self.recipe_finder.pigments
+        cur_d = current.distance(target)
+        best = None
+        ratios = (0.04, 0.08, 0.12, 0.16, 0.22, 0.30, 0.40, 0.50)
+        for p in pigments:
+            for w in ratios:
+                mixed = ColorMixer.mix_subtractive([current, p.color], [1 - w, w])
+                d = mixed.distance(target)
+                if best is None or d < best["delta_e"]:
+                    best = {"pigment": p, "ratio": w, "mixed": mixed, "delta_e": d}
+        if best is None or best["delta_e"] >= cur_d - 0.3:
+            return None
+        return best
+
     def suggest_harmony(self, color: Color) -> Dict[str, List[Color]]:
         """根据色彩理论给出和谐配色方案。"""
         h, s, l = color.hsl

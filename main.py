@@ -64,6 +64,7 @@ except ImportError:
 # 桌面端 numpy 随 OpenCV 提供；Android 端不安装 numpy，仅用 Frame（纯 Python）。
 
 from kivy.app import App
+from kivy.animation import Animation
 from kivy.clock import Clock
 from kivy.graphics.texture import Texture
 from kivy.uix.boxlayout import BoxLayout
@@ -73,7 +74,17 @@ from kivy.uix.label import Label
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.widget import Widget
 from kivy.uix.floatlayout import FloatLayout
-from kivy.graphics import Color as GraphicsColor, Rectangle, Line, Ellipse
+from kivy.graphics import (
+    Color as GraphicsColor,
+    Rectangle,
+    Line,
+    Ellipse,
+    PushMatrix,
+    PopMatrix,
+    Translate,
+    Rotate,
+    Scale,
+)
 from kivy.core.window import Window
 from kivy.metrics import dp
 
@@ -121,6 +132,48 @@ def request_android_camera_permission(callback=None):
 # 摄像头画面组件
 # ──────────────────────────────────────────────
 
+class RotatedImage(Widget):
+    """按 0/90/180/270 度旋转绘制 texture，满幅拉伸填满自身。
+
+    Android 摄像头传感器默认横置（landscape），竖屏手机上画面会旋转 90°，
+    用 canvas 矩阵变换在 GPU 侧旋转，避免逐帧像素级旋转的开销。
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._tex = None
+        self._rot = 0
+        self.bind(pos=self._redraw, size=self._redraw)
+
+    def set_texture(self, tex, rot):
+        self._tex = tex
+        self._rot = int(rot) % 360
+        self._redraw()
+
+    def _redraw(self, *args):
+        self.canvas.clear()
+        tex = self._tex
+        if tex is None or self.width <= 1 or self.height <= 1:
+            return
+        tw, th = tex.size
+        rot = self._rot
+        # 旋转 90/270 时交换宽高方向的缩放比例，保证旋转后恰好填满
+        if rot in (90, 270):
+            angle = -90 if rot == 90 else 90
+            s1, s2 = self.height / float(tw), self.width / float(th)
+        else:
+            angle = rot  # 0 或 180
+            s1, s2 = self.width / float(tw), self.height / float(th)
+        with self.canvas:
+            PushMatrix()
+            Translate(self.center_x, self.center_y)
+            if angle:
+                Rotate(angle)
+            Scale(s1, s2)
+            Rectangle(texture=tex, pos=(-tw / 2.0, -th / 2.0), size=(tw, th))
+            PopMatrix()
+
+
 class CameraView(FloatLayout):
     """摄像头实时画面，支持点击取色。
 
@@ -132,9 +185,10 @@ class CameraView(FloatLayout):
         super().__init__(**kwargs)
         self.on_color_picked = on_color_picked
 
-        self._frame = None        # BGR numpy 数组（统一格式）
-        self._pick_marks = []
+        self._frame = None        # BGR/RGBA 数据的 Frame（统一格式）
         self._camera_started = False
+        # Android 传感器横置，竖屏手机上画面需顺时针旋转 90°；可用旋转按钮调整
+        self._rotation = 90 if IS_ANDROID else 0
 
         if HAS_CV2 and not IS_ANDROID:
             # ── OpenCV 模式（桌面）──
@@ -148,15 +202,31 @@ class CameraView(FloatLayout):
             # 注意：Kivy 的 Camera 在构造时（_on_index）就会尝试打开摄像头硬件，
             # play=False 并不能阻止这次连接。若此时相机权限还没授予，
             # Camera.open 会抛 "Fail to connect to camera service" 直接闪退。
-            # 因此这里绝不在此创建 Camera，改为占位，等 start_camera()（权限获批后）再创建。
+            # 因此这里绝不在此创建 Camera，改为 RotatedImage 占位显示，
+            # 等 start_camera()（权限获批后）再创建。
             self.kivy_camera = None
-            self._ph = Widget()
-            self._ph.size_hint = (1, 1)
-            self.add_widget(self._ph)
+            self.rotated_img = RotatedImage()
+            self.rotated_img.size_hint = (1, 1)
+            self.add_widget(self.rotated_img)
 
         # 十字准星
         self.crosshair = CrosshairWidget()
         self.add_widget(self.crosshair)
+        self.bind(size=self._center_crosshair)
+
+    def _center_crosshair(self, *args):
+        """尺寸变化时把准星放回中心。"""
+        self.crosshair.center = self.center
+
+    def rotate_cw(self):
+        """画面顺时针旋转 90°（修正传感器方向，仅 Android 生效）。"""
+        if HAS_CV2 and not IS_ANDROID:
+            return  # 桌面摄像头方向正常，无需旋转
+        self._rotation = (self._rotation + 90) % 360
+        self.rotated_img.set_texture(
+            self.kivy_camera.texture if self.kivy_camera else None,
+            self._rotation,
+        )
 
     def start_camera(self, camera_index=0):
         """启动摄像头。"""
@@ -184,7 +254,7 @@ class CameraView(FloatLayout):
             self._camera_started = True
 
     def _init_android_camera(self, dt):
-        """在主线程创建 Android KivyCamera。"""
+        """在主线程创建 Android KivyCamera（隐藏，仅作采集器，不直接显示）。"""
         self._cam_sched = False
         if self.kivy_camera is not None:
             return
@@ -193,17 +263,14 @@ class CameraView(FloatLayout):
             c = KivyCamera(
                 play=True,
                 index=0,
-                allow_stretch=True,
-                keep_ratio=False,
                 resolution=(640, 480),
             )
-            # 用 placeholder 替换
-            if self._ph in self.children:
-                self.remove_widget(self._ph)
-            c.size_hint = (1, 1)
+            # 隐藏采集器：画面由 RotatedImage 按 _rotation 旋转渲染
+            c.size_hint = (None, None)
+            c.size = (0, 0)
             self.add_widget(c)
             self.kivy_camera = c
-            crash_log.write_crash("[camera] KivyCamera created ok (main thread), play=True\n")
+            crash_log.write_crash("[camera] KivyCamera created ok (hidden capture), play=True\n")
         except Exception as e:
             import traceback as _tb
             crash_log.write_crash("[camera] KivyCamera create FAILED: %s\n%s\n" % (e, _tb.format_exc()))
@@ -270,21 +337,22 @@ class CameraView(FloatLayout):
             if not getattr(self, "_tex_none_logged", False):
                 self._tex_none_logged = True
                 crash_log.write_crash(
-                    "[camera] texture is None, camera.index=%s play=%s "
-                    "provider=%s\n" % (
+                    "[camera] texture is None, camera.index=%s play=%s\n" % (
                         getattr(self.kivy_camera, "index", "?"),
                         getattr(self.kivy_camera, "play", "?"),
-                        getattr(self.kivy_camera, "play_pos", "?"),
                     )
                 )
             return
+
+        # 画面渲染（GPU 侧旋转）
+        self.rotated_img.set_texture(tex, self._rotation)
 
         w, h = tex.size
         try:
             pixels = tex.pixels
             if not pixels:
                 return
-            # 存为 Frame，仅在取色时按需解码（无需 numpy，避免逐帧转换开销）
+            # 存为 Frame（原始传感器方向，未旋转），仅在取色时按需解码
             self._frame = Frame(pixels, w, h, src="rgba_flip")
         except Exception:
             pass
@@ -295,57 +363,39 @@ class CameraView(FloatLayout):
         if self._frame is None or not self.collide_point(*touch.pos):
             return False
 
-        # 获取画面显示尺寸
-        if HAS_CV2 and not IS_ANDROID:
-            img_w, img_h = self.image_widget.norm_image_size
-        else:
-            if self.kivy_camera is None:
-                return False
-            img_w, img_h = self.kivy_camera.texture_size if self.kivy_camera.texture else (0, 0)
-            # 纹理尺寸与显示尺寸可能不同，需要用 norm_image_size
-            try:
-                img_w, img_h = self.kivy_camera.norm_image_size
-            except Exception:
-                pass
-
-        if img_w == 0 or img_h == 0:
-            return False
-
-        iw, ih = self.size
-        ox = (iw - img_w) / 2
-        oy = (ih - img_h) / 2
-
-        local_x = touch.x - self.x - ox
-        local_y = touch.y - self.y - oy
-
-        if local_x < 0 or local_x > img_w or local_y < 0 or local_y > img_h:
-            return False
-
         frame_h, frame_w = self._frame.shape[:2]
-        fx = int((local_x / img_w) * frame_w)
-        fy = int((1 - local_y / img_h) * frame_h)
-        fx = max(0, min(frame_w - 1, fx))
-        fy = max(0, min(frame_h - 1, fy))
+        if self.width <= 0 or self.height <= 0:
+            return False
+
+        # 显示区域归一化坐标（allow_stretch 满幅，无 letterbox）
+        nu = (touch.x - self.x) / self.width
+        nv = (touch.y - self.y) / self.height
+        nu = max(0.0, min(1.0, nu))
+        nv = max(0.0, min(1.0, nv))
+
+        # Frame 保持传感器原始方向；显示时旋转了 _rotation，
+        # 这里把显示坐标逆映射回原始帧坐标。
+        rot = self._rotation
+        if rot == 90:
+            fx, fy = (1 - nv) * frame_w, nu * frame_h
+        elif rot == 180:
+            fx, fy = (1 - nu) * frame_w, (1 - nv) * frame_h
+        elif rot == 270:
+            fx, fy = nv * frame_w, (1 - nu) * frame_h
+        else:
+            fx, fy = nu * frame_w, nv * frame_h
+
+        fx = int(max(0, min(frame_w - 1, fx)))
+        fy = int(max(0, min(frame_h - 1, fy)))
 
         color = average_color_region(self._frame, (fx, fy), radius=10)
 
-        self._add_pick_mark(touch.x - self.x, touch.y - self.y, color)
         self.crosshair.pos = (touch.x - self.x - 15, touch.y - self.y - 15)
 
         if self.on_color_picked:
             self.on_color_picked(color)
 
         return True
-
-    def _add_pick_mark(self, x, y, color: Color):
-        mark = PickMark(color=color)
-        mark.size = (30, 30)
-        mark.pos = (x - 15, y - 15)
-        self._pick_marks.append(mark)
-        self.add_widget(mark)
-        while len(self._pick_marks) > 5:
-            old = self._pick_marks.pop(0)
-            self.remove_widget(old)
 
     def pick_center(self):
         if self._frame is None:
@@ -380,28 +430,6 @@ class CrosshairWidget(Widget):
             Line(points=[self.center_x - 8, self.center_y, self.center_x + 8, self.center_y], width=1)
             Line(points=[self.center_x, self.center_y - 8, self.center_x, self.center_y + 8], width=1)
 
-
-class PickMark(Widget):
-    """取色点标记（显示取色颜色）。"""
-
-    def __init__(self, color: Color, **kwargs):
-        super().__init__(**kwargs)
-        self.color = color
-        self.bind(pos=self._draw, size=self._draw)
-
-    def _draw(self, *args):
-        self.canvas.clear()
-        with self.canvas:
-            r, g, b = self.color.rgb_normalized
-            GraphicsColor(r, g, b, 1)
-            Ellipse(pos=self.pos, size=self.size)
-            GraphicsColor(1, 1, 1, 0.9)
-            Line(circle=(self.center_x, self.center_y, 14), width=1.5)
-
-
-# ──────────────────────────────────────────────
-# 信息面板
-# ──────────────────────────────────────────────
 
 class ColorSwatch(BoxLayout):
     """颜色色块 + 标签。"""
@@ -593,20 +621,147 @@ class InfoPanel(ScrollView):
 # AI 辅助调色横屏界面
 # ──────────────────────────────────────────────
 
+class FocusBox(Widget):
+    """相机对焦框：点击处显示黄色角框 + 中心点，缩放动画后淡出。"""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.size_hint = (None, None)
+        self.size = (0, 0)
+        self.opacity = 0
+        self.bind(opacity=self._redraw, pos=self._redraw, size=self._redraw)
+
+    def show_at(self, x, y):
+        self.center = (x, y)
+        self.size = (120, 120)
+        final = 72
+        target_pos = (x - final / 2.0, y - final / 2.0)
+        self.opacity = 1
+        Animation.cancel_all(self)
+        anim = Animation(size=(final, final), pos=target_pos, d=0.18, t="out_quad")
+        anim += Animation(opacity=0, d=1.2)
+        anim.start(self)
+        self._redraw()
+
+    def _redraw(self, *args):
+        self.canvas.clear()
+        o = self.opacity
+        if o <= 0.02:
+            return
+        L, w = dp(16), dp(2)
+        x, y, W, H = self.x, self.y, self.width, self.height
+        with self.canvas:
+            GraphicsColor(1, 0.85, 0.2, o)
+            Line(points=[x, y + H, x, y + H - L], width=w)
+            Line(points=[x, y + H, x + L, y + H], width=w)
+            Line(points=[x + W, y + H, x + W - L, y + H], width=w)
+            Line(points=[x + W, y + H, x + W, y + H - L], width=w)
+            Line(points=[x, y, x + L, y], width=w)
+            Line(points=[x, y, x, y + L], width=w)
+            Line(points=[x + W, y, x + W - L, y], width=w)
+            Line(points=[x + W, y, x + W, y + L], width=w)
+            Line(circle=(self.center_x, self.center_y, dp(3)), width=w)
+
+
+class SwatchWidget(Widget):
+    """纯色色块（pos/size 变化自动重绘）。"""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._col = None
+        self.bind(pos=self._redraw, size=self._redraw)
+
+    def set_color(self, color):
+        self._col = color
+        self._redraw()
+
+    def _redraw(self, *args):
+        self.canvas.clear()
+        col = self._col
+        if col is None:
+            return
+        r, g, b = col.rgb_normalized
+        with self.canvas:
+            GraphicsColor(r, g, b, 1)
+            Rectangle(pos=self.pos, size=self.size)
+            GraphicsColor(0, 0, 0, 0.4)
+            Line(rectangle=(self.x, self.y, self.width, self.height), width=1)
+
+
+class ColorBlock(BoxLayout):
+    """标题 + 色块 + hex/名称 组合块。"""
+
+    def __init__(self, title, **kwargs):
+        super().__init__(orientation="vertical", spacing=dp(2), **kwargs)
+        self.lbl_title = Label(
+            text=title, size_hint=(1, None), height=dp(15),
+            font_size=dp(11), color=(0.62, 0.62, 0.68, 1),
+        )
+        self.swatch = SwatchWidget()
+        self.swatch.size_hint = (1, None)
+        self.swatch.height = dp(38)
+        self.lbl_hex = Label(
+            text="--", size_hint=(1, None), height=dp(15),
+            font_size=dp(11), color=(0.9, 0.9, 0.9, 1),
+        )
+        self.add_widget(self.lbl_title)
+        self.add_widget(self.swatch)
+        self.add_widget(self.lbl_hex)
+
+    def set_color(self, color, name=""):
+        if color is None:
+            self.swatch.set_color(None)
+            self.lbl_hex.text = "--"
+            return
+        self.swatch.set_color(color)
+        self.lbl_hex.text = color.hex + (f"  {name}" if name else "")
+
+
+class RatioBar(Widget):
+    """比例条：深灰底 + 彩色按比例填充。"""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._ratio = 0.0
+        self._rgb = (0.35, 0.35, 0.38)
+        self.bind(pos=self._redraw, size=self._redraw)
+
+    def set_ratio(self, ratio, color):
+        self._ratio = max(0.0, min(1.0, ratio))
+        if color is not None:
+            self._rgb = color.rgb_normalized
+        self._redraw()
+
+    def _redraw(self, *args):
+        self.canvas.clear()
+        if self.width <= 1 or self.height <= 1:
+            return
+        with self.canvas:
+            GraphicsColor(0.22, 0.22, 0.25, 1)
+            Rectangle(pos=self.pos, size=self.size)
+            r, g, b = self._rgb
+            GraphicsColor(r, g, b, 1)
+            Rectangle(pos=self.pos, size=(self.width * self._ratio, self.height))
+            GraphicsColor(0, 0, 0, 0.5)
+            Line(rectangle=(self.x, self.y, self.width, self.height), width=1)
+
+
 class AiMixScreen(BoxLayout):
     """AI 辅助调色模式。
 
-    横屏一分为二：
-      - 左半屏「目标色」：点一下锁定/更新目标色（冻结当前帧中心附近）
-      - 右半屏「当前色浆」：实时读取帧中心采样，实时显示
-    底部给出 当前色浆 vs 目标色 的色差与「下一步加什么颜色」建议。
-    复用传入的 CameraView 帧，不新增摄像头。所有颜色先过白卡校色。
+    竖屏：上下分屏（上半摄像头画面 / 下半信息面板）
+    横屏：左右分屏（左摄像头画面 / 右信息面板）
+
+    - 点击画面任意位置：对焦框动画，锁定该处颜色为目标色
+    - 画面中心准星：实时采样"当前色浆"
+    - 信息面板：目标/当前色块、ΔE 色差、下一步要加的颜料（色块+比例条+预计混合色）
+    - 所有颜色先过白卡校色
     """
 
     def __init__(self, camera_view, **kwargs):
         super().__init__(**kwargs)
         self.orientation = "vertical"
-        self.spacing = dp(0)
+        self.spacing = 0
         self.camera_view = camera_view
         self.advisor = ColorAdvisor()
         self.wb = WhiteBalance()
@@ -614,20 +769,25 @@ class AiMixScreen(BoxLayout):
         self._target = None       # 目标色（校正后 Color）
         self._target_raw = None   # 目标色原始采样
         self._sampling_interval = None
-        self._mix_init_prompt = True
+        self._advice_counter = 0
+        self.on_close = None
+
+        # 暂存并替换取色回调：AI 模式下点击画面 = 对焦锁定目标色
+        self._orig_pick_cb = camera_view.on_color_picked
+        camera_view.on_color_picked = self._on_pick_target
 
         self._build_ui()
 
     def _build_ui(self):
-        # 顶部返回/标题栏
-        bar = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(8), padding=dp(6))
+        # ── 顶栏 ──
+        bar = BoxLayout(size_hint=(1, None), height=dp(42), spacing=dp(6), padding=dp(6))
         with bar.canvas.before:
             GraphicsColor(0.13, 0.13, 0.16, 1)
             self._bar_bg = Rectangle(pos=bar.pos, size=bar.size)
         bar.bind(pos=self._resize_bar, size=self._resize_bar)
 
         self.btn_back = Button(
-            text="← 返回", size_hint=(None, 1), width=dp(64),
+            text="← 返回", size_hint=(None, 1), width=dp(62),
             font_size=dp(13), background_color=(0.4, 0.25, 0.2, 1),
         )
         self.btn_back.bind(on_release=lambda b: self.request_close())
@@ -640,90 +800,126 @@ class AiMixScreen(BoxLayout):
         bar.add_widget(self.bar_title)
 
         self.btn_cal = Button(
-            text="白卡校色", size_hint=(None, 1), width=dp(72),
+            text="白卡校色", size_hint=(None, 1), width=dp(70),
             font_size=dp(12), background_color=(0.2, 0.5, 0.45, 1),
         )
         self.btn_cal.bind(on_release=lambda b: self._do_calibrate())
         bar.add_widget(self.btn_cal)
 
         self.bar_status = Label(
-            text="", size_hint=(None, 1), width=dp(64),
-            font_size=dp(11), color=(0.7, 0.9, 0.7, 1),
+            text="", size_hint=(None, 1), width=dp(70),
+            font_size=dp(10), color=(0.7, 0.9, 0.7, 1),
         )
         bar.add_widget(self.bar_status)
-
-        # 顶栏（BoxLayout 垂直排列在第一行）
-        bar.size_hint = (1, None)
-        bar.height = dp(44)
         self.add_widget(bar)
 
-        # 主体左右分栏（弹性占据中间）
-        body = BoxLayout(orientation="horizontal", spacing=1, padding=dp(2))
+        # ── 主体：竖屏上下 / 横屏左右 ──
+        landscape = Window.width > Window.height
+        body = BoxLayout(orientation="horizontal" if landscape else "vertical", spacing=1)
         body.size_hint = (1, 1)
         self.add_widget(body)
 
-        # 左栏：目标色
-        self.left_panel = BoxLayout(orientation="vertical", spacing=dp(4), padding=dp(8))
-        lbl_target = Label(
-            text="目标色（点下图锁定）", size_hint=(1, None), height=dp(26),
-            font_size=dp(13), color=(0.55, 0.8, 1, 1), bold=True,
-        )
-        self.left_panel.add_widget(lbl_target)
+        # 摄像头区（CameraView 由主界面 reparent 进来，FocusBox 叠加其上）
+        self.cam_area = FloatLayout()
+        self.cam_area.size_hint = (0.55, 1) if landscape else (1, 0.55)
+        body.add_widget(self.cam_area)
+        self.focus_box = FocusBox()
 
-        self.left_swatch = Label(
-            text="等待点击锁定目标色\n\n对准画面点击即可", size_hint=(1, 0.55),
-            font_size=dp(13), color=(0.6, 0.6, 0.6, 1), halign="center", valign="middle",
-        )
-        self.left_swatch.bind(size=lambda i, v: setattr(i, "text_size", i.size))
-        self.left_panel.add_widget(self.left_swatch)
-        self.left_swatch.bind(on_touch_down=lambda w, t: self._on_left_touch(w, t) if w.collide_point(*t.pos) else None)
+        # 信息面板（可滚动）
+        scroll = ScrollView()
+        scroll.size_hint = (0.45, 1) if landscape else (1, 0.45)
+        body.add_widget(scroll)
 
-        self.left_info = Label(
-            text="", size_hint=(1, None), height=dp(40),
-            font_size=dp(12), color=(0.85, 0.85, 0.85, 1),
+        self.info_box = BoxLayout(
+            orientation="vertical", size_hint_y=None,
+            spacing=dp(4), padding=dp(8),
+        )
+        self.info_box.bind(minimum_height=self.info_box.setter("height"))
+        scroll.add_widget(self.info_box)
+
+        # 目标色 | 当前色浆 并排
+        row = BoxLayout(orientation="horizontal", spacing=dp(8),
+                        size_hint_y=None, height=dp(76))
+        self.target_block = ColorBlock("目标色（点击对焦）")
+        self.current_block = ColorBlock("当前色浆（中心准星）")
+        row.add_widget(self.target_block)
+        row.add_widget(self.current_block)
+        self.info_box.add_widget(row)
+
+        # 色差
+        self.delta_lbl = Label(
+            text="ΔE 色差：--", size_hint_y=None, height=dp(22),
+            font_size=dp(13), color=(1, 0.9, 0.5, 1), bold=True,
+        )
+        self.info_box.add_widget(self.delta_lbl)
+
+        # 下一步添加（颜料可视化：色块+名称+比例条+比例）
+        advice_title = Label(
+            text="下一步添加", size_hint_y=None, height=dp(18),
+            font_size=dp(12), color=(0.62, 0.62, 0.68, 1),
+        )
+        self.info_box.add_widget(advice_title)
+
+        pig_row = BoxLayout(orientation="horizontal", spacing=dp(6),
+                            size_hint_y=None, height=dp(46))
+        self.pig_swatch = SwatchWidget()
+        self.pig_swatch.size_hint = (None, 1)
+        self.pig_swatch.width = dp(46)
+        pig_row.add_widget(self.pig_swatch)
+
+        pig_mid = BoxLayout(orientation="vertical", spacing=dp(2), size_hint=(None, 1))
+        pig_mid.width = dp(96)
+        self.pig_name_lbl = Label(
+            text="先对焦目标色", size_hint=(1, None), height=dp(20),
+            font_size=dp(13), color=(1, 1, 1, 1), bold=True,
             halign="left", valign="middle",
         )
-        self.left_info.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
-        self.left_panel.add_widget(self.left_info)
-
-        # 右栏：当前色浆 + 建议
-        self.right_panel = BoxLayout(orientation="vertical", spacing=dp(4), padding=dp(8))
-        lbl_mix = Label(
-            text="当前色浆（实时）", size_hint=(1, None), height=dp(26),
-            font_size=dp(13), color=(0.7, 1, 0.7, 1), bold=True,
-        )
-        self.right_panel.add_widget(lbl_mix)
-
-        self.right_swatch = Label(
-            text="实时采样中…\n请将色浆对准画面中心",
-            size_hint=(1, 0.55), font_size=dp(13), color=(0.6, 0.6, 0.6, 1),
-            halign="center", valign="middle",
-        )
-        self.right_swatch.bind(size=lambda i, v: setattr(i, "text_size", i.size))
-        self.right_panel.add_widget(self.right_swatch)
-
-        self.right_info = Label(
-            text="", size_hint=(1, None), height=dp(40),
-            font_size=dp(12), color=(0.85, 0.85, 0.85, 1),
+        self.pig_name_lbl.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
+        pig_mid.add_widget(self.pig_name_lbl)
+        self.pig_desc_lbl = Label(
+            text="点击画面锁定目标颜色", size_hint=(1, None), height=dp(15),
+            font_size=dp(10), color=(0.6, 0.6, 0.65, 1),
             halign="left", valign="middle",
         )
-        self.right_info.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
-        self.right_panel.add_widget(self.right_info)
+        self.pig_desc_lbl.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
+        pig_mid.add_widget(self.pig_desc_lbl)
+        pig_row.add_widget(pig_mid)
 
-        body.add_widget(self.left_panel)
-        body.add_widget(self.right_panel)
+        self.pig_bar = RatioBar()
+        pig_row.add_widget(self.pig_bar)
 
-        # 底部建议区
-        self.advice = Label(
-            text="请先在左侧锁定目标色，然后把正在调的色浆对准画面中心，\n"
-                 "这里会实时给出色差和「下一步加什么颜色」。",
-            size_hint=(1, None), height=dp(96),
-            font_size=dp(13), color=(1, 1, 1, 1), halign="center", valign="middle",
+        self.pig_ratio_lbl = Label(
+            text="--", size_hint=(None, 1), width=dp(44),
+            font_size=dp(13), color=(1, 0.9, 0.5, 1), bold=True,
         )
-        self.advice.size_hint = (1, None)
-        self.advice.height = dp(96)
-        self.advice.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
-        self.add_widget(self.advice)
+        pig_row.add_widget(self.pig_ratio_lbl)
+        self.info_box.add_widget(pig_row)
+
+        # 预计混合后
+        exp_row = BoxLayout(orientation="horizontal", spacing=dp(8),
+                            size_hint_y=None, height=dp(76))
+        self.expect_block = ColorBlock("预计混合后")
+        self.expect_delta_lbl = Label(
+            text="", size_hint=(1, None), height=dp(34),
+            font_size=dp(11), color=(0.7, 0.9, 0.7, 1),
+        )
+        exp_row.add_widget(self.expect_block)
+        exp_row.add_widget(self.expect_delta_lbl)
+        self.info_box.add_widget(exp_row)
+
+        # 白卡状态 + 操作提示
+        self.wb_lbl = Label(
+            text=self.wb.describe(), size_hint_y=None, height=dp(16),
+            font_size=dp(10), color=(0.55, 0.55, 0.6, 1),
+        )
+        self.info_box.add_widget(self.wb_lbl)
+
+        tip = Label(
+            text="提示：点击画面任意位置对焦锁定目标色；把色浆对准中心准星实时看差距",
+            size_hint_y=None, height=dp(28), font_size=dp(10),
+            color=(0.5, 0.5, 0.55, 1),
+        )
+        self.info_box.add_widget(tip)
 
     def _resize_bar(self, inst, val):
         self._bar_bg.pos = inst.pos
@@ -731,61 +927,54 @@ class AiMixScreen(BoxLayout):
 
     def open(self, on_close=None):
         self.on_close = on_close or (lambda: None)
-        self._mix_init_prompt = True
-        Window.set_system_cursor("wait")  # no-op 安全
-        # 启动实时采样
         self._sampling_interval = Clock.schedule_interval(self._poll, 1.0 / 15)
-        # 目标色初始化为画面中心（若有画面）
-        if self.camera_view is not None and self.camera_view._frame is not None:
-            self._do_capture_target()
 
     def close(self):
-        """仅做清理，不触发回调（避免与 shutdown/on_close 形成递归）。"""
+        """仅清理（计时器 + 恢复回调），不触发 on_close，避免递归。"""
         if self._sampling_interval is not None:
             Clock.unschedule(self._sampling_interval)
             self._sampling_interval = None
+        if self.camera_view is not None and getattr(self, "_orig_pick_cb", None) is not None:
+            self.camera_view.on_color_picked = self._orig_pick_cb
+            self._orig_pick_cb = None
 
     def request_close(self):
-        """请求关闭：清理计时器后通知 on_close（由主界面完成移除）。"""
+        """请求关闭：清理后通知 on_close（由主界面完成移除与摄像头归还）。"""
         self.close()
         cb = getattr(self, "on_close", None)
         if cb:
             cb()
 
     def shutdown(self):
-        """shutdown = 清理计时器（不触发 on_close，防止递归）。"""
-        if self._sampling_interval is not None:
-            Clock.unschedule(self._sampling_interval)
-            self._sampling_interval = None
+        """shutdown = close（清理计时器与回调，不触发 on_close，防止递归）。"""
+        self.close()
 
     # ── 取色 ──
 
+    def _on_pick_target(self, color):
+        """点击画面：对焦锁定目标色 + 对焦框动画。"""
+        if color is None:
+            return
+        self._target_raw = color
+        self._target = self.wb.apply(color)
+        self.target_block.set_color(self._target, self.advisor.analyze(self._target).name)
+        # 对焦框画在准星位置（CameraView 已把准星移到点击处，坐标与 cam_area 一致）
+        try:
+            ch = self.camera_view.crosshair
+            self.focus_box.show_at(ch.center_x, ch.center_y)
+        except Exception:
+            pass
+        corrected, _ = self._center_color()
+        if corrected is not None:
+            self._render_advice(corrected)
+
     def _center_color(self, radius=12):
-        """从当前帧中心采样（原始），返回校正后颜色与原始颜色。"""
+        """画面中心（准星）采样，返回校正后与原始颜色。"""
         if self.camera_view is None or self.camera_view._frame is None:
             return None, None
         h, w = self.camera_view._frame.shape[:2]
         raw = average_color_region(self.camera_view._frame, (w // 2, h // 2), radius=radius)
         return self.wb.apply(raw), raw
-
-    def _do_capture_target(self):
-        """从画面中心锁定为目标色（限左栏）。"""
-        corrected, raw = self._center_color()
-        if corrected is None:
-            return False
-        self._target = corrected
-        self._target_raw = raw
-        self._mix_init_prompt = False
-        self._render(force=True)
-        return True
-
-    def _on_left_touch(self, widget, touch):
-        if touch.is_double_tap:
-            return False
-        # 在左栏点击即锁定为新的目标色
-        if self._do_capture_target():
-            return True
-        return False
 
     # ── 校色 ──
 
@@ -799,13 +988,14 @@ class AiMixScreen(BoxLayout):
             self._set_status("无画面")
             return
         try:
-            self.wb.calibrate(raw)  # 名义默认中性灰
+            self.wb.calibrate(raw)
             self._set_status("已校色")
-            # 校色可能改变目标色与当前色浆，重算
-            if self._target is not None:
+            self.wb_lbl.text = self.wb.describe()
+            # 校色改变后重算目标色
+            if self._target is not None and self._target_raw is not None:
                 self._target = self.wb.apply(self._target_raw)
-            self._render(force=True)
-        except Exception as e:
+                self.target_block.set_color(self._target, self.advisor.analyze(self._target).name)
+        except Exception:
             self._set_status("校色失败")
 
     def _set_status(self, text):
@@ -816,84 +1006,51 @@ class AiMixScreen(BoxLayout):
     def _poll(self, dt):
         if self.camera_view is None:
             return
-        self._render(force=False)
-
-    def _render(self, force=False):
-        corrected, raw = self._center_color()
-
-        # 当前色浆（右栏）实时更新
-        if corrected is not None:
-            self._draw_swatch(self.right_swatch, corrected)
-            self.right_info.text = (
-                f"色浆  {corrected.hex}   {self.advisor.analyze(corrected).name}\n"
-                f"RGB {corrected.rgb[0]},{corrected.rgb[1]},{corrected.rgb[2]}"
-            )
-        else:
-            self.right_swatch.text = "无画面"
-            self.right_info.text = ""
-
-        # 目标色（左栏）
-        if self._target is not None:
-            self._draw_swatch(self.left_swatch, self._target)
-            self.left_info.text = f"目标  {self._target.hex}   {self.advisor.analyze(self._target).name}"
-
-        # 建议
-        self._render_advice()
-
-    def _draw_swatch(self, widget, color):
-        """用纯色矩形背景实时画出色块。"""
-        widget._sw_col = color
-        r, g, b = color.rgb_normalized
-        if not hasattr(widget, "_sw_drawn"):
-            widget.bind(pos=self._redraw_swatch, size=self._redraw_swatch)
-            widget._sw_drawn = True
-        widget.canvas.clear()
-        with widget.canvas:
-            GraphicsColor(r, g, b, 1)
-            Rectangle(pos=widget.pos, size=widget.size)
-            GraphicsColor(0, 0, 0, 0.35)
-            Line(rectangle=(widget.x, widget.y, widget.width, widget.height), width=1)
-        widget.text = color.hex
-        widget.color = (1, 1, 1, 1) if (r + g + b) < 1.2 else (0, 0, 0, 1)
-
-    def _redraw_swatch(self, inst, val):
-        col = getattr(inst, "_sw_col", None)
-        if col is None:
-            return
-        r, g, b = col.rgb_normalized
-        inst.canvas.clear()
-        with inst.canvas:
-            GraphicsColor(r, g, b, 1)
-            Rectangle(pos=inst.pos, size=inst.size)
-            GraphicsColor(0, 0, 0, 0.35)
-            Line(rectangle=(inst.x, inst.y, inst.width, inst.height), width=1)
-
-    def _render_advice(self):
-        if self._target is None:
-            if self._mix_init_prompt:
-                self.advice.text = "请在左侧点击锁定目标色\n然后把正在调的色浆对准画面中心"
-            else:
-                self.advice.text = "目标色已锁定\n请将色浆对准画面中心，实时看下一步建议"
-            return
-
         corrected, _ = self._center_color()
         if corrected is None:
             return
+        self.current_block.set_color(corrected, self.advisor.analyze(corrected).name)
 
-        de = self._target.distance(corrected)
-        if de <= 2.0:
-            self.advice.text = (
-                f"✓ 当前色浆已非常接近目标（ΔE={de:.1f}）\n"
-                "基本到位，可再微调或暂存。"
-            )
+        if self._target is not None:
+            de = self._target.distance(corrected)
+            if de <= 2.0:
+                self.delta_lbl.text = f"ΔE 色差：{de:.1f}  ✓ 已非常接近"
+            else:
+                self.delta_lbl.text = f"ΔE 色差：{de:.1f}"
+            # 颜料建议计算量较大，每 5 帧重算一次
+            self._advice_counter += 1
+            if self._advice_counter % 5 == 0:
+                self._render_advice(corrected)
+        else:
+            self.delta_lbl.text = "ΔE 色差：--"
+
+    # ── 建议渲染 ──
+
+    def _render_advice(self, current):
+        if self._target is None:
+            return
+        suggestion = self.advisor.suggest_next_pigment(current, self._target)
+
+        if suggestion is None:
+            self.pig_swatch.set_color(None)
+            self.pig_name_lbl.text = "已接近目标"
+            self.pig_desc_lbl.text = "无需继续加色，或换更接近的基色微调"
+            self.pig_bar.set_ratio(0, None)
+            self.pig_ratio_lbl.text = "--"
+            self.expect_block.set_color(None)
+            self.expect_delta_lbl.text = ""
             return
 
-        suggestion = self.advisor.suggest_adjustment(corrected, self._target)
-        # suggest_adjustment 返回已带"调整建议：\n  • xxx"格式
-        self.advice.text = (
-            f"目标 {self._target.hex}   当前 {corrected.hex}   ΔE={de:.1f}\n"
-            f"{suggestion}\n"
-            f"{self.wb.describe()}"
+        p = suggestion["pigment"]
+        ratio = suggestion["ratio"]
+        self.pig_swatch.set_color(p.color)
+        self.pig_name_lbl.text = p.name
+        self.pig_desc_lbl.text = p.description or "基色颜料"
+        self.pig_bar.set_ratio(ratio, p.color)
+        self.pig_ratio_lbl.text = f"{ratio * 100:.0f}%"
+        self.expect_block.set_color(suggestion["mixed"])
+        self.expect_delta_lbl.text = (
+            f"加入后 ΔE：{self._target.distance(current):.1f} → {suggestion['delta_e']:.1f}"
         )
 
 
@@ -942,18 +1099,19 @@ class ColorAssistantApp(App):
 
         self.main_box.add_widget(title_bar)
 
-        # 主体区域
+        # 主体区域（竖屏：摄像头 55% / 信息 45%）
         if Window.width > Window.height and Window.width > 600:
             body = BoxLayout(orientation="horizontal", spacing=1)
             self.camera_view = CameraView(on_color_picked=self._on_color_picked, size_hint=(0.55, 1))
             self.info_panel = InfoPanel(size_hint=(0.45, 1))
         else:
             body = BoxLayout(orientation="vertical", spacing=1)
-            self.camera_view = CameraView(on_color_picked=self._on_color_picked, size_hint=(1, 0.5))
-            self.info_panel = InfoPanel(size_hint=(1, 0.5))
+            self.camera_view = CameraView(on_color_picked=self._on_color_picked, size_hint=(1, 0.55))
+            self.info_panel = InfoPanel(size_hint=(1, 0.45))
 
         body.add_widget(self.camera_view)
         body.add_widget(self.info_panel)
+        self._body = body
         self.main_box.add_widget(body)
 
         # 底部工具栏
@@ -975,9 +1133,9 @@ class ColorAssistantApp(App):
         btn_ai.bind(on_release=lambda btn: self._on_open_mix())
         toolbar.add_widget(btn_ai)
 
-        btn_clear = Button(text="清除标记", size_hint=(None, 1), width=dp(80), font_size=dp(13), background_color=(0.4, 0.2, 0.2, 1))
-        btn_clear.bind(on_release=lambda btn: self._on_clear_marks())
-        toolbar.add_widget(btn_clear)
+        btn_rotate = Button(text="旋转画面", size_hint=(None, 1), width=dp(80), font_size=dp(13), background_color=(0.35, 0.45, 0.6, 1))
+        btn_rotate.bind(on_release=lambda btn: self._on_rotate())
+        toolbar.add_widget(btn_rotate)
 
         btn_log = Button(text="日志", size_hint=(None, 1), width=dp(56), font_size=dp(13), background_color=(0.25, 0.25, 0.35, 1))
         btn_log.bind(on_release=lambda btn: self._on_show_crash_path())
@@ -1028,29 +1186,41 @@ class ColorAssistantApp(App):
         """向用户展示崩溃日志写入位置。"""
         self.info_panel.show_crash_path(_crash_path)
 
-    def _on_clear_marks(self):
-        for mark in self.camera_view._pick_marks:
-            self.camera_view.remove_widget(mark)
-        self.camera_view._pick_marks.clear()
+    def _on_rotate(self):
+        """画面顺时针旋转 90°（修正 Android 传感器方向）。"""
+        self.camera_view.rotate_cw()
 
     # ── AI 辅助调色 ──
 
     def _on_open_mix(self):
-        """打开 AI 辅助调色横屏界面。"""
+        """打开 AI 辅助调色界面（竖屏上下分屏 / 横屏左右分屏）。"""
         if self.mix_screen is not None:
             return
+        # 摄像头从主界面摘下，reparent 到 AI 界面画面区（复用同一摄像头）
+        if self.camera_view.parent is not None:
+            self.camera_view.parent.remove_widget(self.camera_view)
+        self.camera_view.size_hint = (1, 1)
+
         self.mix_screen = AiMixScreen(camera_view=self.camera_view)
         # 全屏覆盖（FloatLayout 顶层）
         self.mix_screen.size_hint = (1, 1)
         self.mix_screen.pos_hint = {"x": 0, "y": 0}
         self.root.add_widget(self.mix_screen)
+
+        # 摄像头在下层，对焦框叠加其上
+        self.mix_screen.cam_area.add_widget(self.camera_view)
+        self.mix_screen.cam_area.add_widget(self.mix_screen.focus_box)
+
         self.mix_screen.open(on_close=self._on_close_mix)
 
     def _on_close_mix(self):
-        """关闭 AI 辅助调色界面，回到主界面。"""
+        """关闭 AI 辅助调色界面，摄像头归还主界面。"""
         if self.mix_screen is None:
             return
         self.mix_screen.shutdown()
+        # 摄像头移回主界面原位置（body 第一个子项）
+        self.mix_screen.cam_area.remove_widget(self.camera_view)
+        self._body.add_widget(self.camera_view, index=0)
         self.root.remove_widget(self.mix_screen)
         self.mix_screen = None
 

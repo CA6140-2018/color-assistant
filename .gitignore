@@ -36,3 +36,7 @@ fonts/*.ttf
 artifact_APK.tar.gz
 tools/
 wsl_check.txt
+
+# Pigment config (generated at first run per device)
+pigments.json
+crash_log.txt
