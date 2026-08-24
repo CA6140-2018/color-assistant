@@ -17,7 +17,10 @@ source.exclude_dirs = __pycache__, .git, build, dist, bin
 source.exclude_patterns = requirements.txt, README.md, *.spec.bak
 
 # 依赖（不包含 opencv 与 numpy，Android 用 Kivy 原生 Camera + 纯 Python 取色，缩短交叉编译）
-requirements = python3,kivy==2.3.1
+# filetype 是纯 Python 包，Kivy 的 kivy.core.image 启动时依赖它；
+# 我们把 p4a 的 kivy recipe 里 python_depends 清空了（避免 charset-normalizer 编译扩展问题），
+# 所以必须在此显式补上 filetype，否则运行时 No module named 'filetype' 直接闪退。
+requirements = python3,kivy==2.3.1,filetype==1.2.0
 
 # Android 设置
 android.permissions = CAMERA, WRITE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE
