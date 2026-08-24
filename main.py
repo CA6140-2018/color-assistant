@@ -175,31 +175,40 @@ class CameraView(FloatLayout):
                 self._camera_started = True
                 Clock.schedule_interval(self._update_cv2_frame, 1.0 / 30)
         else:
-            # 权限已授予后才创建摄像头并播放（规避 Camera 构造即连硬件的闪退）
-            if self.kivy_camera is None:
-                try:
-                    from kivy.uix.camera import Camera as KivyCamera
-                    c = KivyCamera(
-                        play=True,
-                        index=0,
-                        allow_stretch=True,
-                        keep_ratio=False,
-                        resolution=(640, 480),
-                    )
-                    # 用 placeholder 替换
-                    idx = self.children.index(self._ph) if self._ph in self.children else 0
-                    self.remove_widget(self._ph)
-                    c.size_hint = (1, 1)
-                    self.add_widget(c)
-                    self.kivy_camera = c
-                    crash_log.write_crash("[camera] KivyCamera created ok, play=True\n")
-                except Exception as e:
-                    # 摄像头打开失败（被占用/权限被拒/无设备），界面仍可用
-                    import traceback as _tb
-                    crash_log.write_crash("[camera] KivyCamera create FAILED: %s\n%s\n" % (e, _tb.format_exc()))
-                    self.kivy_camera = None
+            # 权限已授予后才创建摄像头并播放。KivyCamera() 构造时会创建 graphics 指令，
+            # 只能在 Kivy 主线程执行；而 start_camera 可能被权限回调等非主线程调用，
+            # 因此整个 Android 分支统一调度到主线程执行。
+            if self.kivy_camera is None and not getattr(self, "_cam_sched", False):
+                self._cam_sched = True
+                Clock.schedule_once(self._init_android_camera, 0)
             self._camera_started = True
-            Clock.schedule_interval(self._update_kivy_frame, 1.0 / 30)
+
+    def _init_android_camera(self, dt):
+        """在主线程创建 Android KivyCamera。"""
+        self._cam_sched = False
+        if self.kivy_camera is not None:
+            return
+        try:
+            from kivy.uix.camera import Camera as KivyCamera
+            c = KivyCamera(
+                play=True,
+                index=0,
+                allow_stretch=True,
+                keep_ratio=False,
+                resolution=(640, 480),
+            )
+            # 用 placeholder 替换
+            if self._ph in self.children:
+                self.remove_widget(self._ph)
+            c.size_hint = (1, 1)
+            self.add_widget(c)
+            self.kivy_camera = c
+            crash_log.write_crash("[camera] KivyCamera created ok (main thread), play=True\n")
+        except Exception as e:
+            import traceback as _tb
+            crash_log.write_crash("[camera] KivyCamera create FAILED: %s\n%s\n" % (e, _tb.format_exc()))
+            self.kivy_camera = None
+        Clock.schedule_interval(self._update_kivy_frame, 1.0 / 30)
 
     def stop_camera(self):
         if HAS_CV2 and not IS_ANDROID:
@@ -620,7 +629,7 @@ class AiMixScreen(BoxLayout):
             text="← 返回", size_hint=(None, 1), width=dp(64),
             font_size=dp(13), background_color=(0.4, 0.25, 0.2, 1),
         )
-        self.btn_back.bind(on_release=lambda b: self.close())
+        self.btn_back.bind(on_release=lambda b: self.request_close())
         bar.add_widget(self.btn_back)
 
         self.bar_title = Label(
@@ -730,14 +739,23 @@ class AiMixScreen(BoxLayout):
             self._do_capture_target()
 
     def close(self):
+        """仅做清理，不触发回调（避免与 shutdown/on_close 形成递归）。"""
         if self._sampling_interval is not None:
             Clock.unschedule(self._sampling_interval)
             self._sampling_interval = None
-        if self.on_close:
-            self.on_close()
+
+    def request_close(self):
+        """请求关闭：清理计时器后通知 on_close（由主界面完成移除）。"""
+        self.close()
+        cb = getattr(self, "on_close", None)
+        if cb:
+            cb()
 
     def shutdown(self):
-        self.close()
+        """shutdown = 清理计时器（不触发 on_close，防止递归）。"""
+        if self._sampling_interval is not None:
+            Clock.unschedule(self._sampling_interval)
+            self._sampling_interval = None
 
     # ── 取色 ──
 
