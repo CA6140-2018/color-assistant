@@ -408,6 +408,7 @@ class ColorSwatch(BoxLayout):
 
     def __init__(self, color: Color, label_text: str = "", **kwargs):
         super().__init__(**kwargs)
+        self.color = color
         self.orientation = "horizontal"
         self.size_hint_y = None
         self.height = dp(36)
@@ -907,7 +908,11 @@ class ColorAssistantApp(App):
         self.title = "AI 调色助手"
         Window.clearcolor = (0.12, 0.12, 0.14, 1)
 
-        self.root = BoxLayout(orientation="vertical", spacing=0)
+        # 根容器：FloatLayout，用于承载主界面 + AI调色全屏覆盖层
+        self.root = FloatLayout()
+        self.main_box = BoxLayout(orientation="vertical", spacing=0)
+        self.main_box.size_hint = (1, 1)
+        self.root.add_widget(self.main_box)
 
         # 顶部标题栏
         title_bar = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(8), padding=dp(8))
@@ -935,7 +940,7 @@ class ColorAssistantApp(App):
         btn_report.bind(on_release=lambda btn: self._on_report())
         title_bar.add_widget(btn_report)
 
-        self.root.add_widget(title_bar)
+        self.main_box.add_widget(title_bar)
 
         # 主体区域
         if Window.width > Window.height and Window.width > 600:
@@ -949,7 +954,7 @@ class ColorAssistantApp(App):
 
         body.add_widget(self.camera_view)
         body.add_widget(self.info_panel)
-        self.root.add_widget(body)
+        self.main_box.add_widget(body)
 
         # 底部工具栏
         toolbar = BoxLayout(size_hint=(1, None), height=dp(48), spacing=dp(6), padding=dp(8))
@@ -978,7 +983,7 @@ class ColorAssistantApp(App):
         btn_log.bind(on_release=lambda btn: self._on_show_crash_path())
         toolbar.add_widget(btn_log)
 
-        self.root.add_widget(toolbar)
+        self.main_box.add_widget(toolbar)
 
         self._current_color = None
         self.mix_screen = None
@@ -1035,8 +1040,9 @@ class ColorAssistantApp(App):
         if self.mix_screen is not None:
             return
         self.mix_screen = AiMixScreen(camera_view=self.camera_view)
-        # 全屏覆盖
+        # 全屏覆盖（FloatLayout 顶层）
         self.mix_screen.size_hint = (1, 1)
+        self.mix_screen.pos_hint = {"x": 0, "y": 0}
         self.root.add_widget(self.mix_screen)
         self.mix_screen.open(on_close=self._on_close_mix)
 
