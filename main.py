@@ -144,19 +144,14 @@ class CameraView(FloatLayout):
             self._camera_active = False
         else:
             # ── Kivy Camera 模式（Android / 无 OpenCV）──
-            from kivy.uix.camera import Camera as KivyCamera
-
-            # play 先保持 False：Android 上若在权限授予前就 play=True，
-            # 打开摄像头硬件会在 API 33+ 直接抛异常导致闪退。
-            # 由 start_camera() 在权限获批后再置 True。
-            self.kivy_camera = KivyCamera(
-                play=False,
-                index=0,
-                allow_stretch=True,
-                keep_ratio=False,
-                resolution=(640, 480),
-            )
-            self.add_widget(self.kivy_camera)
+            # 注意：Kivy 的 Camera 在构造时（_on_index）就会尝试打开摄像头硬件，
+            # play=False 并不能阻止这次连接。若此时相机权限还没授予，
+            # Camera.open 会抛 "Fail to connect to camera service" 直接闪退。
+            # 因此这里绝不在此创建 Camera，改为占位，等 start_camera()（权限获批后）再创建。
+            self.kivy_camera = None
+            self._ph = Widget()
+            self._ph.size_hint = (1, 1)
+            self.add_widget(self._ph)
 
         # 十字准星
         self.crosshair = CrosshairWidget()
@@ -179,13 +174,26 @@ class CameraView(FloatLayout):
                 self._camera_started = True
                 Clock.schedule_interval(self._update_cv2_frame, 1.0 / 30)
         else:
-            # 权限已授予后才真正打开摄像头
-            if hasattr(self, "kivy_camera"):
+            # 权限已授予后才创建摄像头并播放（规避 Camera 构造即连硬件的闪退）
+            if self.kivy_camera is None:
                 try:
-                    self.kivy_camera.play = True
+                    from kivy.uix.camera import Camera as KivyCamera
+                    c = KivyCamera(
+                        play=True,
+                        index=0,
+                        allow_stretch=True,
+                        keep_ratio=False,
+                        resolution=(640, 480),
+                    )
+                    # 用 placeholder 替换
+                    idx = self.children.index(self._ph) if self._ph in self.children else 0
+                    self.remove_widget(self._ph)
+                    c.size_hint = (1, 1)
+                    self.add_widget(c)
+                    self.kivy_camera = c
                 except Exception:
-                    # 摄像头打开失败（被占用/无设备），不影响 UI 运行
-                    pass
+                    # 摄像头打开失败（被占用/权限被拒/无设备），界面仍可用
+                    self.kivy_camera = None
             self._camera_started = True
             Clock.schedule_interval(self._update_kivy_frame, 1.0 / 30)
 
@@ -199,7 +207,7 @@ class CameraView(FloatLayout):
                 self.capture = None
         else:
             Clock.unschedule(self._update_kivy_frame)
-            if hasattr(self, "kivy_camera"):
+            if self.kivy_camera is not None:
                 self.kivy_camera.play = False
         self._camera_started = False
 
@@ -240,7 +248,7 @@ class CameraView(FloatLayout):
     # ── Kivy Camera 帧更新 ──
 
     def _update_kivy_frame(self, dt):
-        if not hasattr(self, "kivy_camera"):
+        if not hasattr(self, "kivy_camera") or self.kivy_camera is None:
             return
 
         tex = self.kivy_camera.texture
@@ -267,6 +275,8 @@ class CameraView(FloatLayout):
         if HAS_CV2 and not IS_ANDROID:
             img_w, img_h = self.image_widget.norm_image_size
         else:
+            if self.kivy_camera is None:
+                return False
             img_w, img_h = self.kivy_camera.texture_size if self.kivy_camera.texture else (0, 0)
             # 纹理尺寸与显示尺寸可能不同，需要用 norm_image_size
             try:
