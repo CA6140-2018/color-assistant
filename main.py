@@ -419,6 +419,12 @@ class CameraView(FloatLayout):
             self.rotated_img = RotatedImage()
             self.rotated_img.size_hint = (1, 1)
             self.add_widget(self.rotated_img)
+            self._placeholder = Label(
+                text="摄像头启动中…",
+                font_size=dp(14),
+                color=(0.45, 0.45, 0.5, 1),
+            )
+            self.add_widget(self._placeholder)
 
         # 十字准星
         self.crosshair = CrosshairWidget()
@@ -476,9 +482,12 @@ class CameraView(FloatLayout):
                 index=0,
                 resolution=(640, 480),
             )
-            # 隐藏采集器：画面由 RotatedImage 按 _rotation 旋转渲染
+            # 隐藏采集器：画面由 RotatedImage 按 _rotation 旋转渲染。
+            # 三重保险（尺寸0 + 透明 + 移出屏幕），防止采集器自身画面漏到界面上。
             c.size_hint = (None, None)
             c.size = (0, 0)
+            c.opacity = 0
+            c.pos = (-2000, -2000)
             self.add_widget(c)
             self.kivy_camera = c
             crash_log.write_crash("[camera] KivyCamera created ok (hidden capture), play=True\n")
@@ -557,6 +566,21 @@ class CameraView(FloatLayout):
 
         # 画面渲染（GPU 侧旋转）
         self.rotated_img.set_texture(tex, self._rotation)
+
+        if getattr(self, "_placeholder", None) is not None:
+            self.remove_widget(self._placeholder)
+            self._placeholder = None
+        if not getattr(self, "_geom_logged", False):
+            self._geom_logged = True
+            ri = self.rotated_img
+            kc = self.kivy_camera
+            crash_log.write_crash(
+                "[layout] cam=%d,%d,%d,%d rot=%d,%d,%d,%d kcam=%d,%d,%d,%d op=%.1f\n" % (
+                    self.x, self.y, self.width, self.height,
+                    ri.x, ri.y, ri.width, ri.height,
+                    kc.x, kc.y, kc.width, kc.height, kc.opacity,
+                )
+            )
 
         w, h = tex.size
         try:
@@ -969,6 +993,7 @@ class InfoPanel(ScrollView):
         self.container.add_widget(hc)
 
         self.container.height = self.container.minimum_height
+        Clock.schedule_once(lambda dt: setattr(self, "scroll_y", 1), 0.15)
 
     def show_report(self, color: Color):
         self._clear()
@@ -978,6 +1003,8 @@ class InfoPanel(ScrollView):
         rbody.add_widget(self._lbl(report, font_size=dp(11), color=THEME["label"]))
         self.container.add_widget(rc)
         self.container.height = self.container.minimum_height
+        # 内容高度异步更新后滚回顶部，避免首行被裁
+        Clock.schedule_once(lambda dt: setattr(self, "scroll_y", 1), 0.15)
 
 
 # ──────────────────────────────────────────────
@@ -1712,6 +1739,8 @@ class ColorAssistantApp(App):
         body.add_widget(self.info_panel)
         self._body = body
         self.main_box.add_widget(body)
+        # 布局完成后再把准星放到画面中心（构造时尺寸还是默认值）
+        Clock.schedule_once(lambda dt: self.camera_view._center_crosshair(), 0.5)
 
         # 底部工具栏（iOS 浅色卡片风格）
         toolbar = BoxLayout(size_hint=(1, None), height=dp(56), spacing=dp(8), padding=(dp(10), dp(8), dp(10), dp(8)))
@@ -1822,7 +1851,9 @@ class ColorAssistantApp(App):
         if self.mix_screen is None:
             return
         self.mix_screen.shutdown()
-        # 摄像头移回主界面原位置（body 第一个子项）
+        # 摄像头移回主界面原位置（body 第一个子项），恢复主界面布局比例
+        landscape = Window.width > Window.height and Window.width > 600
+        self.camera_view.size_hint = (0.55, 1) if landscape else (1, 0.55)
         self.mix_screen.cam_area.remove_widget(self.camera_view)
         self._body.add_widget(self.camera_view, index=0)
         self.root.remove_widget(self.mix_screen)
