@@ -9,6 +9,7 @@ AI 调色助手 - 主程序
     python main.py
 """
 
+import math
 import os
 import sys
 
@@ -74,9 +75,11 @@ from kivy.uix.label import Label
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.widget import Widget
 from kivy.uix.floatlayout import FloatLayout
+from kivy.uix.slider import Slider
 from kivy.graphics import (
     Color as GraphicsColor,
     Rectangle,
+    RoundedRectangle,
     Line,
     Ellipse,
     PushMatrix,
@@ -106,6 +109,213 @@ from color_engine import (
 )
 from ai_assistant import ColorAdvisor, nearest_named_color
 from paint_library import best_match
+
+
+# ──────────────────────────────────────────────
+# iOS 浅色主题配色
+# ──────────────────────────────────────────────
+THEME = {
+    "bg":        (0.949, 0.949, 0.953, 1),   # 系统灰（F2F2F7）
+    "card":      (1.000, 1.000, 1.000, 1),   # 卡片白
+    "card_alt":  (0.969, 0.969, 0.973, 1),   # 次级卡片
+    "primary":   (0.000, 0.478, 1.000, 1),   # iOS 蓝 007AFF
+    "primary_d": (0.038, 0.337, 0.780, 1),   # 深蓝（点按）
+    "label":     (0.110, 0.110, 0.118, 1),   # 主文字 1C1C1E
+    "label_2":   (0.557, 0.557, 0.576, 1),   # 次要文字 8E8E93
+    "separator": (0.780, 0.780, 0.800, 1),   # 分隔线
+    "success":   (0.204, 0.780, 0.349, 1),   # 绿 34C759
+    "warning":   (1.000, 0.580, 0.000, 1),   # 橙 FF9400
+    "danger":    (1.000, 0.271, 0.227, 1),   # 红 FF453A
+    "text_on_bg": (0.110, 0.110, 0.118, 1),  # 卡片上文字
+}
+
+RC = 12  # 卡片圆角
+
+
+def _rounded_card(widget, color=THEME["card"], radius=(RC, RC, RC, RC), alpha=1.0):
+    """给 widget 画一张圆角卡片背景，返回可随 pos/size 更新的背景 Rectangle。"""
+    from kivy.graphics import RoundedRectangle
+    with widget.canvas.before:
+        GraphicsColor(color[0], color[1], color[2], alpha)
+        r = RoundedRectangle(pos=widget.pos, size=widget.size, radius=radius)
+    widget.bind(pos=lambda i, v: setattr(r, "pos", i.pos),
+                size=lambda i, v: setattr(r, "size", i.size))
+    return r
+
+
+# ──────────────────────────────────────────────
+# AI 调色界面深色主题（参考图 2 工业深蓝风）
+# ──────────────────────────────────────────────
+DARK = {
+    "bg":        (0.039, 0.086, 0.157, 1),   # #0a1628
+    "title_bg":  (0.102, 0.227, 0.361, 1),   # #1a3a5c 渐变起点
+    "card":      (0.118, 0.227, 0.373, 1),   # #1e3a5f
+    "card_2":    (0.086, 0.176, 0.314, 1),   # #163050
+    "text":      (1.000, 1.000, 1.000, 1),
+    "sub":       (0.541, 0.608, 0.702, 1),   # #8a9bb3
+    "accent":    (0.961, 0.902, 0.000, 1),   # #f5e600 亮黄
+    "orange":    (1.000, 0.420, 0.208, 1),   # #ff6b35
+    "orange_2":  (1.000, 0.549, 0.259, 1),   # #ff8c42
+    "gold":      (0.941, 0.753, 0.251, 1),   # #f0c040
+    "track":     (0.082, 0.204, 0.353, 1),   # 深色轨道
+    "red":       (1.000, 0.271, 0.271, 1),   # 样板区红圈
+    "sel_bg":    (0.176, 0.294, 0.431, 1),   # 选中按钮背景
+}
+
+
+def _dark_card(widget, color=DARK["card"], radius=[dp(10)]):
+    """给 widget 画一张深色圆角卡片背景（参考图 2）。"""
+    with widget.canvas.before:
+        GraphicsColor(color[0], color[1], color[2], 1)
+        r = RoundedRectangle(pos=widget.pos, size=widget.size, radius=radius)
+    widget.bind(pos=lambda i, v: setattr(r, "pos", i.pos),
+                size=lambda i, v: setattr(r, "size", i.size))
+    return r
+
+
+# ──────────────────────────────────────────────
+# 色彩分析可视化组件（参考图 1）
+# ──────────────────────────────────────────────
+
+class MeterBar(Widget):
+    """双向仪表条：深灰低 + 高亮区 + 彩色指示线（只读，展示分量位置）。"""
+
+    def __init__(self, lo, hi, **kwargs):
+        super().__init__(**kwargs)
+        self.lo = lo
+        self.hi = hi
+        self.value = 0.0
+        self._tint = (0.0, 0.478, 1.0, 1)
+        self.bind(pos=self._redraw, size=self._redraw)
+
+    def set(self, value, tint=None):
+        self.value = value
+        if tint:
+            self._tint = tint
+        self._redraw()
+
+    def _norm(self):
+        if self.hi - self.lo <= 0:
+            return 0.0
+        return max(0.0, min(1.0, (self.value - self.lo) / (self.hi - self.lo)))
+
+    def _redraw(self, *args):
+        self.canvas.clear()
+        W, H = self.width, self.height
+        if W <= 1 or H <= 1:
+            return
+        mid = W * 0.5
+        n = self._norm()
+        xp = W * n
+        with self.canvas:
+            GraphicsColor(0.87, 0.87, 0.9, 1)
+            Line(points=[0, H / 2, W, H / 2], width=max(2.0, H * 0.4))
+            # 高亮区：偏向一侧填充到指示线
+            t = self._tint
+            GraphicsColor(t[0], t[1], t[2], 0.9)
+            lo_x, hi_x = (mid, xp) if xp >= mid else (xp, mid)
+            Line(points=[lo_x, H / 2, hi_x, H / 2], width=max(2.0, H * 0.4))
+            # 指示线
+            GraphicsColor(*t)
+            Line(points=[xp, 0, xp, H], width=2.0)
+            # 中心刻度
+            GraphicsColor(0.6, 0.6, 0.66, 1)
+            Line(points=[mid, 0, mid, H], width=1.2)
+
+
+class PolarHueChart(Widget):
+    """极坐标色相图：C* 饱和度 + h° 色相角定位。
+
+    同心圆表示饱和度等级；黄(+b)/红(+a)/蓝(-b)/绿(-a) 四轴；
+    蓝色射线指向色相角 h°，其末端的彩色圆点表示当前颜色位置。
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.__color = None
+        self._C = 0.0
+        self._h_deg = 0.0
+        self._labels = []
+        for i, (text, pos) in enumerate([
+            ("红(+a)", 0), ("黄(+b)", 1), ("蓝(-b)", 2), ("绿(-a)", 3),
+        ]):
+            from kivy.uix.label import Label as KLabel
+            lb = KLabel(
+                text=text, font_size=dp(9), color=(0.45, 0.45, 0.5, 1),
+                size_hint=(None, None), size=(dp(40), dp(14)),
+                halign="center", valign="middle",
+            )
+            self._labels.append(lb)
+        self.bind(pos=self._redraw, size=self._redraw)
+
+    def set_color(self, color):
+        self.__color = color
+        if color is not None:
+            a, b = color.lab[1], color.lab[2]
+            self._C = math.hypot(a, b)
+            self._h_deg = math.degrees(math.atan2(b, a)) % 360.0
+        self._redraw()
+
+    def _redraw(self, *args):
+        self.canvas.clear()
+        W, H = self.width, self.height
+        if W <= 1 or H <= 1:
+            return
+        cx, cy = W / 2.0, H / 2.0
+        R = min(W, H) / 2.0 - 2.0
+        h_rad = math.radians(self._h_deg)
+        # 取色点半径：饱和度 C 满幅按 60 计（Lab 典型最大 ~128），留余量
+        scale = min(1.0, self._C / 70.0)
+        xp = cx + math.cos(h_rad) * R * scale
+        yp = cy + math.sin(h_rad) * R * scale
+
+        with self.canvas:
+            # 同心圆（饱和度环）
+            for i in range(1, 4):
+                rr = R * i / 4.0
+                GraphicsColor(0.84, 0.84, 0.87, 1)
+                Line(circle=(cx, cy, rr), width=0.7)
+            GraphicsColor(0.74, 0.74, 0.78, 1)
+            Line(circle=(cx, cy, R), width=1.1)
+            # 十字轴
+            GraphicsColor(0.88, 0.88, 0.9, 1)
+            Line(points=[cx - R, cy, cx + R, cy], width=0.6)
+            Line(points=[cx, cy - R, cx, cy + R], width=0.6)
+            # 射线
+            if scale > 0.01:
+                GraphicsColor(0.0, 0.478, 1.0, 0.55)
+                Line(points=[cx, cy, cx + math.cos(h_rad) * R * scale,
+                             cy + math.sin(h_rad) * R * scale], width=2.5)
+            # 外圈四个象限轴加粗
+            GraphicsColor(0.24, 0.85, 0.44, 1)   # 绿 -a 左
+            Line(points=[cx - R, cy - 3, cx - R, cy + 3], width=1.4)
+            GraphicsColor(1.0, 0.16, 0.18, 1)    # 红 +a 右
+            Line(points=[cx + R, cy - 3, cx + R, cy + 3], width=1.4)
+            GraphicsColor(1.0, 0.78, 0.05, 1)    # 黄 +b 上
+            Line(points=[cx - 3, cy + R, cx + 3, cy + R], width=1.4)
+            GraphicsColor(0.28, 0.45, 0.95, 1)   # 蓝 -b 下
+            Line(points=[cx - 3, cy - R, cx + 3, cy - R], width=1.4)
+            # 当前色点
+            if self.__color is not None:
+                r, g, b = self.__color.rgb_normalized
+                GraphicsColor(r, g, b, 1)
+                Ellipse(pos=(xp - 4, yp - 4), size=(8, 8))
+                GraphicsColor(0.5, 0.5, 0.5, 1)
+                Ellipse(pos=(xp - 5, yp - 5), size=(10, 10))
+            else:
+                GraphicsColor(0.5, 0.5, 0.55, 1)
+                Ellipse(pos=(cx - 3, cy - 3), size=(6, 6))
+        # 轴上文字：红右 / 黄上 / 蓝下 / 绿左
+        lw2 = dp(20)
+        for lb, (tx, ty) in zip(self._labels, [
+            (cx + R / 2 + 2, cy - lw2 / 2),      # 红 +a 右
+            (cx - lw2 / 2, cy + R / 2 + 2),      # 黄 +b 上
+            (cx - lw2 / 2, cy - R / 2 - 2),      # 蓝 -b 下
+            (cx - R / 2 - 2, cy - lw2 / 2),      # 绿 -a 左
+        ]):
+            lb.center = (tx, ty)
+            if lb.parent is None:
+                self.add_widget(lb)
 
 
 # ──────────────────────────────────────────────
@@ -360,19 +570,23 @@ class CameraView(FloatLayout):
 
     # ── 点击取色 ──
 
-    def on_touch_down(self, touch):
-        if self._frame is None or not self.collide_point(*touch.pos):
-            return False
-
+    def frame_coords_for(self, lx, ly, radius=10):
+        """把显示区局部坐标 (lx,ly) 逆映射为原始帧坐标，返回 Color。
+        取色点传 None 表示显示区中心。"""
+        if self._frame is None:
+            return None
         frame_h, frame_w = self._frame.shape[:2]
         if self.width <= 0 or self.height <= 0:
-            return False
+            return None
 
         # 显示区域归一化坐标（allow_stretch 满幅，无 letterbox）
-        nu = (touch.x - self.x) / self.width
-        nv = (touch.y - self.y) / self.height
-        nu = max(0.0, min(1.0, nu))
-        nv = max(0.0, min(1.0, nv))
+        if lx is None:
+            nu, nv = 0.5, 0.5
+        else:
+            nu = (lx - self.x) / self.width
+            nv = (ly - self.y) / self.height
+            nu = max(0.0, min(1.0, nu))
+            nv = max(0.0, min(1.0, nv))
 
         # Frame 保持传感器原始方向；显示时旋转了 _rotation，
         # 这里把显示坐标逆映射回原始帧坐标。
@@ -388,8 +602,19 @@ class CameraView(FloatLayout):
 
         fx = int(max(0, min(frame_w - 1, fx)))
         fy = int(max(0, min(frame_h - 1, fy)))
+        return average_color_region(self._frame, (fx, fy), radius=radius)
 
-        color = average_color_region(self._frame, (fx, fy), radius=10)
+    def sample_at(self, lx, ly, radius=10):
+        """采样显示区局部坐标 (lx,ly) 的颜色，返回 Color 或 None。"""
+        return self.frame_coords_for(lx, ly, radius=radius)
+
+    def on_touch_down(self, touch):
+        if self._frame is None or not self.collide_point(*touch.pos):
+            return False
+
+        color = self.sample_at(touch.x, touch.y, radius=10)
+        if color is None:
+            return False
 
         self.crosshair.pos = (touch.x - self.x - 15, touch.y - self.y - 15)
 
@@ -461,7 +686,7 @@ class ColorSwatch(BoxLayout):
             valign="middle",
             halign="left",
             font_size=dp(13),
-            color=(0.9, 0.9, 0.9, 1),
+            color=THEME["label"],
             markup=True,
         )
         self.label.bind(size=self._update_label)
@@ -481,13 +706,14 @@ class ColorSwatch(BoxLayout):
 
 
 class InfoPanel(ScrollView):
-    """右侧/下侧信息面板。"""
+    """右侧/下侧信息面板（iOS 浅色卡片风格）。"""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.advisor = ColorAdvisor()
+        self.do_scroll_x = False
 
-        self.container = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6), padding=dp(8))
+        self.container = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(10), padding=(dp(4), dp(4), dp(4), dp(4)))
         self.container.bind(minimum_height=self.container.setter("height"))
         self.add_widget(self.container)
 
@@ -496,15 +722,40 @@ class InfoPanel(ScrollView):
     def _clear(self):
         self.container.clear_widgets()
 
-    def _add_label(self, text, size=None, bold=False, color=(0.9, 0.9, 0.9, 1), font_size=None):
+    # ── iOS 卡片 ——
+    def _card(self, title=None):
+        """创建一张圆角白卡片，返回外层容器（可滚动高度自适配）。"""
+        outer = BoxLayout(orientation="vertical", size_hint_y=None, spacing=0)
+        card = BoxLayout(orientation="vertical", size_hint_y=None, spacing=0)
+        body = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6), padding=dp(12))
+        if title:
+            t = Label(
+                text=title, size_hint_y=None, height=dp(22),
+                font_size=dp(13), bold=True, color=THEME["label"],
+                halign="left", valign="middle",
+            )
+            t.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
+            body.add_widget(t)
+        card.add_widget(body)
+        outer.add_widget(card)
+        _rounded_card(card)
+        # 高度跟随内容：body.minimum→body.height→card.height→outer.height
+        body.bind(minimum_height=body.setter("height"))
+        body.bind(minimum_height=lambda i, v: setattr(card, "height", v))
+        card.bind(minimum_height=card.setter("height"))
+        card.bind(minimum_height=lambda i, v: setattr(outer, "height", v))
+        outer.bind(minimum_height=outer.setter("height"))
+        return outer
+
+    def _lbl(self, text, size=None, bold=False, color=None, font_size=None):
         lbl = Label(
             text=text,
             size_hint_y=None,
             height=size or dp(20),
             valign="top",
             halign="left",
-            font_size=font_size or dp(13),
-            color=color,
+            font_size=font_size or dp(12),
+            color=color or THEME["label"],
             markup=True,
             bold=bold,
         )
@@ -513,7 +764,6 @@ class InfoPanel(ScrollView):
             texture_size=lambda inst, val: setattr(inst, "height", max(val[1], dp(20))),
         )
         lbl.text_size = (lbl.width, None)
-        self.container.add_widget(lbl)
         return lbl
 
     def _add_swatch(self, color: Color, label_text: str):
@@ -523,104 +773,210 @@ class InfoPanel(ScrollView):
 
     def _show_placeholder(self):
         self._clear()
-        self._add_label("等待取色...", font_size=dp(15), color=(0.6, 0.6, 0.6, 1))
-        self._add_label("", size=dp(8))
-        self._add_label(
-            "[color=a0a0a0]操作说明：\n"
+        c = self._card("调色助手")
+        body = c.children[0]
+        body.add_widget(self._lbl("等待取色...", font_size=dp(15), color=THEME["label_2"]))
+        body.add_widget(self._lbl(""))
+        body.add_widget(self._lbl(
             "1. 点击摄像头画面任意位置取色\n"
-            "2. 或点击「中心取色」按钮\n"
-            "3. 系统将分析颜色并给出调色配方[/color]",
-            font_size=dp(12),
-        )
+            "2. 或点击「中心取色」/「提取主色」\n"
+            "3. 系统将分析颜色并给出调色配方",
+            color=THEME["label_2"], font_size=dp(12),
+        ))
+        self.container.add_widget(c)
 
     def _show_permission_denied(self):
         self._clear()
-        self._add_label("[color=F44336]摄像头权限被拒绝[/color]", font_size=dp(15))
-        self._add_label("", size=dp(8))
-        self._add_label(
-            "[color=a0a0a0]请在系统设置中授予摄像头权限，然后重新打开应用。[/color]",
-            font_size=dp(12),
-        )
+        c = self._card("提示")
+        body = c.children[0]
+        body.add_widget(self._lbl("[color=FF3B30]摄像头权限被拒绝[/color]", font_size=dp(15)))
+        body.add_widget(self._lbl(""))
+        body.add_widget(self._lbl(
+            "请在系统设置中授予摄像头权限，然后重新打开应用。",
+            color=THEME["label_2"], font_size=dp(12),
+        ))
+        self.container.add_widget(c)
 
     def show_crash_path(self, path):
         self._clear()
-        self._add_label("[b][color=FFB300]崩溃日志位置[/color][/b]", font_size=dp(16))
-        self._add_label("", size=dp(8))
-        self._add_label(
-            "[color=a0a0a0]应用若异常闪退，日志会自动写入下面这个文件。\n"
-            "请用手机『文件管理』找到它，把内容发给我：[/color]",
-            font_size=dp(12),
-        )
-        self._add_label("", size=dp(8))
-        self._add_label(f"[color=4FC3F7][b]{path}[/b][/color]", font_size=dp(11))
-        self._add_label("", size=dp(8))
-        self._add_label(
-            "[color=a0a0a0]文件可能位置：Download / sdcard 根目录 / 应用专属目录[/color]",
-            font_size=dp(11),
-        )
+        c = self._card("崩溃日志位置")
+        body = c.children[0]
+        body.add_widget(self._lbl("应用若异常闪退，日志会自动写入下面这个文件。", color=THEME["label_2"], font_size=dp(12)))
+        body.add_widget(self._lbl(f"[b][color=007AFF]{path}[/color][/b]", font_size=dp(11)))
+        self.container.add_widget(c)
 
     def show_analysis(self, color: Color):
         self._clear()
 
         analysis = self.advisor.analyze(color)
 
-        self._add_label("[b][color=4FC3F7]采集颜色[/color][/b]", font_size=dp(16))
+        # —— 采集颜色卡片 ——
+        head = self._card()
+        body = head.children[0]
+        body.add_widget(self._lbl(f"[b]{analysis.hex_code}[/b]  「{analysis.name}」", font_size=dp(14)))
+        self.container.add_widget(head)
         self._add_swatch(color, f"{analysis.hex_code}  「{analysis.name}」")
 
-        if analysis.paint_matches:
-            self._add_label("", size=dp(6))
-            self._add_label("[b][color=FFD54F]商用色卡匹配[/color][/b]", font_size=dp(14))
-            for m in analysis.paint_matches[:5]:
-                self._add_swatch(m.color, f"{m.display}  ΔE={m.delta_e:.1f}")
+        # —— Lab LCh 卡片（参考图 1）——
+        lch = self._card("Lab LCh")
+        lbody = lch.children[0]
+        L, a, b = color.lab
+        C = math.hypot(a, b)
+        h = math.degrees(math.atan2(b, a)) % 360.0
 
-        self._add_label("", size=dp(6))
-
-        self._add_label("[b]色值数据[/b]", font_size=dp(14), color=(0.8, 0.8, 0.8, 1))
-        self._add_label(f"RGB:  {color.rgb[0]}, {color.rgb[1]}, {color.rgb[2]}", font_size=dp(12))
-        self._add_label(f"HSL:  H={analysis.hsl[0]:.1f}°  S={analysis.hsl[1]:.1f}%  L={analysis.hsl[2]:.1f}%", font_size=dp(12))
-        self._add_label(f"HSV:  H={analysis.hsv[0]:.1f}°  S={analysis.hsv[1]:.1f}%  V={analysis.hsv[2]:.1f}%", font_size=dp(12))
-        self._add_label(f"CMYK: C={analysis.cmyk[0]:.1f}  M={analysis.cmyk[1]:.1f}  Y={analysis.cmyk[2]:.1f}  K={analysis.cmyk[3]:.1f}", font_size=dp(12))
-
-        self._add_label("", size=dp(6))
-
-        self._add_label("[b]色彩分析[/b]", font_size=dp(14), color=(0.8, 0.8, 0.8, 1))
-        self._add_label(f"色温: {analysis.temperature}", font_size=dp(12))
-        self._add_label(f"明度: {analysis.brightness}", font_size=dp(12))
-        self._add_label(f"饱和度: {analysis.saturation_level}", font_size=dp(12))
-        self._add_label(f"色彩感受: {analysis.mood}", font_size=dp(12))
-
-        self._add_label("", size=dp(6))
-
-        self._add_label("[b][color=81C784]调色配方推荐[/color][/b]", font_size=dp(14))
-        recipes = self.advisor.suggest_recipe(color, top_n=3)
-        for i, recipe in enumerate(recipes, 1):
-            self._add_label(
-                f"[b]方案 {i}[/b]  {recipe.accuracy}  ΔE={recipe.delta_e:.2f}",
-                font_size=dp(12),
-                color=(0.85, 0.85, 0.85, 1),
+        # 三个彩色徽标
+        badge_row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(34))
+        for txt, col in ((f"L {L:.1f}", THEME["label"]),
+                         (f"a {a:+.1f}", THEME["success"]),
+                         (f"b {b:+.1f}", THEME["warning"])):
+            bx = BoxLayout(size_hint_x=None, width=dp(104), size_hint_y=None, height=dp(30))
+            dark = (0.30, 0.30, 0.32, 1) if col is THEME["label"] else col
+            with bx.canvas.before:
+                GraphicsColor(dark[0], dark[1], dark[2], 1)
+                _r = RoundedRectangle(pos=bx.pos, size=bx.size, radius=[dp(6)])
+            bx.bind(pos=lambda i, v, rect=_r: setattr(rect, "pos", i.pos),
+                    size=lambda i, v, rect=_r: setattr(rect, "size", i.size))
+            bl = Label(
+                text=txt, font_size=dp(15), bold=True, color=(1, 1, 1, 1),
+                halign="center", valign="middle",
             )
-            self._add_swatch(recipe.result, f"混合 → {recipe.result.hex}")
-            for name, _, ratio in recipe.components:
-                desc = pigment_description(name)
-                line = f"  {name} {ratio:.0f}%"
-                if desc:
-                    line += f" （{desc}）"
-                self._add_label(line, font_size=dp(11), color=(0.7, 0.7, 0.7, 1))
-            self._add_label("", size=dp(4))
+            bl.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
+            bx.add_widget(bl)
+            badge_row.add_widget(bx)
+        badge_row.add_widget(Widget())
+        lbody.add_widget(badge_row)
 
-        self._add_label("[b][color=CE93D8]和谐配色[/color][/b]", font_size=dp(14))
+        # C* 与 h° 大字
+        metric = BoxLayout(orientation="horizontal", spacing=dp(16), size_hint_y=None, height=dp(52))
+        for (val, _sub) in ((f"C* {C:.1f}", "饱和度"), (f"h° {h:.1f}", "色相角")):
+            bx = BoxLayout(orientation="vertical")
+            bl = Label(text=val, font_size=dp(20), color=THEME["primary"], bold=True, halign="left")
+            bl.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
+            bx.add_widget(bl)
+            bx.add_widget(self._lbl(_sub, font_size=dp(10), color=THEME["label_2"]))
+            metric.add_widget(bx)
+        metric.add_widget(Widget())
+        lbody.add_widget(metric)
+
+        # 三条双向仪表条：L 黑白 / a 红绿 / b 黄蓝
+        def _lab_meter(title, lo, hi, value, tint):
+            row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(22))
+            lab = Label(
+                text=title, size_hint=(None, 1), width=dp(86),
+                font_size=dp(11), color=THEME["label_2"], halign="right", valign="middle",
+            )
+            lab.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
+            bar = MeterBar(lo, hi, size_hint=(1, 1))
+            bar.set(value, tint)
+            row.add_widget(lab)
+            row.add_widget(bar)
+            lbody.add_widget(row)
+
+        _lab_meter("明度 L", 0, 100, L, THEME["label"])
+        _lab_meter("红绿 a", -128, 128, a, THEME["success"])
+        _lab_meter("黄蓝 b", -128, 128, b, THEME["warning"])
+
+        # 极坐标色相图
+        chart_row = BoxLayout(orientation="horizontal", spacing=dp(10), size_hint_y=None, height=dp(170))
+        self._polar = PolarHueChart(size_hint=(1, 1))
+        self._polar.set_color(color)
+        chart_row.add_widget(self._polar)
+        side = BoxLayout(orientation="vertical", size_hint=(None, 1), width=dp(66), spacing=dp(6))
+        for txt, col in ((f"C* {C:.1f}", (0.8, 0.1, 0.3, 1)), (f"h° {h:.1f}", THEME["primary"])):
+            sl = Label(
+                text=txt, size_hint_y=None, height=dp(22),
+                font_size=dp(15), bold=True, color=col, halign="center", valign="middle",
+            )
+            sl.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
+            side.add_widget(sl)
+        side.add_widget(Widget())
+        chart_row.add_widget(side)
+        lbody.add_widget(chart_row)
+
+        rgb_line = self._lbl(
+            f"RGB {color.rgb[0]} {color.rgb[1]} {color.rgb[2]}   HEX {color.hex}",
+            font_size=dp(11), color=THEME["label_2"],
+        )
+        lbody.add_widget(rgb_line)
+        self.container.add_widget(lch)
+
+        # —— 商用色卡匹配 ——
+        if analysis.paint_matches:
+            pc = self._card("商用色卡匹配")
+            pbody = pc.children[0]
+            for m in analysis.paint_matches[:4]:
+                pbody.add_widget(self._lbl(f"● {m.display}   ΔE={m.delta_e:.1f}", font_size=dp(12)))
+            self.container.add_widget(pc)
+
+        # —— 色彩分析 ——
+        ma = self._card("色彩分析")
+        mbody = ma.children[0]
+        mbody.add_widget(self._lbl(f"识别：{analysis.name}  |  {analysis.temperature}  |  {analysis.brightness}  |  {analysis.saturation_level}", font_size=dp(12)))
+        mbody.add_widget(self._lbl(f"感受：{analysis.mood}", font_size=dp(12), color=THEME["label_2"]))
+        self.container.add_widget(ma)
+
+        # —— 参考颜色配方（参考图 1：色点 + 比例条 + 数值）——
+        rc = self._card("参考颜色配方")
+        rbody = rc.children[0]
+        recipes = self.advisor.suggest_recipe(color, top_n=1)
+        if recipes:
+            rec = recipes[0]
+            rec_note = self._lbl(f"方案 ΔE={rec.delta_e:.1f}", size=dp(16), font_size=dp(11), color=THEME["label_2"])
+            rbody.add_widget(rec_note)
+            pname_color = {}
+            for p in getattr(self.advisor.recipe_finder, "pigments", []) or []:
+                pname_color[p.name] = p.color
+            for name, _, ratio in rec.components:
+                row = BoxLayout(orientation="horizontal", spacing=dp(6), size_hint_y=None, height=dp(30))
+                sw = SwatchWidget()
+                sw.size_hint = (None, 1)
+                sw.width = dp(22)
+                col = pname_color.get(name)
+                sw.set_color(col if col else None)
+                row.add_widget(sw)
+                nm = Label(
+                    text=name, size_hint=(None, 1), width=dp(56),
+                    font_size=dp(12), color=THEME["label"], bold=True,
+                    halign="left", valign="middle",
+                )
+                nm.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
+                row.add_widget(nm)
+                bar = RatioBar(size_hint=(1, 1))
+                bar.set_ratio(ratio, col if col else None)
+                row.add_widget(bar)
+                vl = Label(
+                    text=f"{ratio:.1f}", size_hint=(None, 1), width=dp(40),
+                    font_size=dp(12), color=THEME["label"], bold=True,
+                    halign="center", valign="middle",
+                )
+                row.add_widget(vl)
+                rbody.add_widget(row)
+            for i, recipe in enumerate(recipes[1:], 2):
+                rbody.add_widget(self._lbl(f"备选方案 {i}  ΔE={recipe.delta_e:.1f}", size=dp(18), font_size=dp(11), color=THEME["label_2"]))
+                parts = "  ".join(f"{n} {r:.0f}%" for n, _, r in recipe.components[:4])
+                rbody.add_widget(self._lbl(parts, size=dp(18), font_size=dp(11), color=THEME["label"]))
+        else:
+            rbody.add_widget(self._lbl("暂无配方", size=dp(20), font_size=dp(12), color=THEME["label_2"]))
+        self.container.add_widget(rc)
+
+        # —— 和谐配色 ——
+        hc = self._card("和谐配色")
+        hbody = hc.children[0]
         harmony = self.advisor.suggest_harmony(color)
         for scheme, colors in harmony.items():
-            swatch_text = "  ".join(f"{c.hex}" for c in colors)
-            self._add_label(f"{scheme}: {swatch_text}", font_size=dp(11), color=(0.7, 0.7, 0.7, 1))
+            txts = "  ".join(c.hex for c in colors)
+            hbody.add_widget(self._lbl(f"{scheme}: {txts}", font_size=dp(11), color=THEME["label_2"]))
+        self.container.add_widget(hc)
 
         self.container.height = self.container.minimum_height
 
     def show_report(self, color: Color):
         self._clear()
-        self._add_label("[b][color=4FC3F7]完整调色报告[/color][/b]", font_size=dp(15))
+        rc = self._card("完整调色报告")
+        rbody = rc.children[0]
         report = self.advisor.generate_full_report(color)
-        self._add_label(report, font_size=dp(11), color=(0.85, 0.85, 0.85, 1))
+        rbody.add_widget(self._lbl(report, font_size=dp(11), color=THEME["label"]))
+        self.container.add_widget(rc)
         self.container.height = self.container.minimum_height
 
 
@@ -696,21 +1052,25 @@ class SwatchWidget(Widget):
 
 
 class ColorBlock(BoxLayout):
-    """标题 + 色块 + hex/名称 组合块。"""
+    """标题 + 色块 + hex/名称 组合块（iOS 浅色）。"""
 
     def __init__(self, title, **kwargs):
         super().__init__(orientation="vertical", spacing=dp(2), **kwargs)
         self.lbl_title = Label(
             text=title, size_hint=(1, None), height=dp(15),
-            font_size=dp(11), color=(0.62, 0.62, 0.68, 1),
+            font_size=dp(11), color=THEME["label_2"],
+            halign="left", valign="middle",
         )
+        self.lbl_title.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
         self.swatch = SwatchWidget()
         self.swatch.size_hint = (1, None)
         self.swatch.height = dp(38)
         self.lbl_hex = Label(
             text="--", size_hint=(1, None), height=dp(15),
-            font_size=dp(11), color=(0.9, 0.9, 0.9, 1),
+            font_size=dp(11), color=THEME["label"],
+            halign="left", valign="middle",
         )
+        self.lbl_hex.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
         self.add_widget(self.lbl_title)
         self.add_widget(self.swatch)
         self.add_widget(self.lbl_hex)
@@ -725,12 +1085,12 @@ class ColorBlock(BoxLayout):
 
 
 class RatioBar(Widget):
-    """比例条：深灰底 + 彩色按比例填充。"""
+    """比例条：浅灰底 + 彩色按比例填充。"""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._ratio = 0.0
-        self._rgb = (0.35, 0.35, 0.38)
+        self._rgb = (0.6, 0.6, 0.66)
         self.bind(pos=self._redraw, size=self._redraw)
 
     def set_ratio(self, ratio, color):
@@ -744,7 +1104,7 @@ class RatioBar(Widget):
         if self.width <= 1 or self.height <= 1:
             return
         with self.canvas:
-            GraphicsColor(0.22, 0.22, 0.25, 1)
+            GraphicsColor(0.88, 0.88, 0.9, 1)
             Rectangle(pos=self.pos, size=self.size)
             r, g, b = self._rgb
             GraphicsColor(r, g, b, 1)
@@ -753,16 +1113,91 @@ class RatioBar(Widget):
             Line(rectangle=(self.x, self.y, self.width, self.height), width=1)
 
 
+class DragRing(Widget):
+    """可拖动的取样圈：圆环 + 中心点 + 底部小标签。
+
+    - 在 cam_area（与 CameraView 同坐标）内拖动
+    - 拖动时调用 on_drag，把显示坐标交给上层采样
+    """
+
+    def __init__(self, label, ring_color, **kwargs):
+        super().__init__(**kwargs)
+        self.label_text = label
+        self._ring = ring_color
+        self._radius = dp(26)
+        self._dragging = False
+        self.on_drag = None
+        self.size = (dp(160), dp(160))
+        self.bind(pos=self._redraw, size=self._redraw)
+
+        from kivy.uix.label import Label as KLabel
+        self._label = KLabel(
+            text=label, font_size=dp(10), bold=True,
+            color=(1, 1, 1, 1), size_hint=(None, None), size=(dp(56), dp(16)),
+        )
+        with self._label.canvas.before:
+            GraphicsColor(0, 0, 0, 0.55)
+            self._label_bg = Rectangle(pos=self._label.pos, size=self._label.size)
+        self._label.bind(pos=lambda i, v: setattr(self._label_bg, "pos", i.pos),
+                         size=lambda i, v: setattr(self._label_bg, "size", i.size))
+        self._label_parent = None
+
+    def set_radius(self, r):
+        self._radius = max(dp(14), r)
+        self._redraw()
+
+    def on_touch_down(self, touch):
+        if not self.collide_point(*touch.pos):
+            return False
+        self._dragging = True
+        touch.grab(self)
+        return True
+
+    def on_touch_move(self, touch):
+        if self._dragging and touch.grab_current is self:
+            self.center = touch.pos
+            self._redraw()
+            if self.on_drag:
+                self.on_drag()
+            return True
+        return False
+
+    def on_touch_up(self, touch):
+        if self._dragging and touch.grab_current is self:
+            self._dragging = False
+            touch.ungrab(self)
+            return True
+        return False
+
+    def _redraw(self, *args):
+        self.canvas.clear()
+        cx, cy = self.center_x, self.center_y
+        r = self._radius
+        with self.canvas:
+            # 半透明填充 + 圆环
+            GraphicsColor(self._ring[0], self._ring[1], self._ring[2], 0.16)
+            Ellipse(pos=(cx - r, cy - r), size=(r * 2, r * 2))
+            GraphicsColor(self._ring[0], self._ring[1], self._ring[2], 0.95)
+            Line(circle=(cx, cy, r), width=dp(3))
+            GraphicsColor(1, 1, 1, 0.9)
+            Line(circle=(cx, cy, r + 3), width=dp(1))
+            # 中心点
+            GraphicsColor(self._ring[0], self._ring[1], self._ring[2], 1)
+            Ellipse(pos=(cx - 4, cy - 4), size=(8, 8))
+        # 标签放在圆下方
+        if self._label is not None and self._label.parent is self:
+            self._label.center_x = cx
+            self._label.y = cy - r - dp(20)
+
+
 class AiMixScreen(BoxLayout):
-    """AI 辅助调色模式。
+    """AI 辅助调色模式 —— 双点取样·实时对比（iOS 浅色）。
 
-    竖屏：上下分屏（上半摄像头画面 / 下半信息面板）
-    横屏：左右分屏（左摄像头画面 / 右信息面板）
-
-    - 点击画面任意位置：对焦框动画，锁定该处颜色为目标色
-    - 画面中心准星：实时采样"当前色浆"
-    - 信息面板：目标/当前色块、ΔE 色差、下一步要加的颜料（色块+比例条+预计混合色）
-    - 所有颜色先过白卡校色
+    竖屏上下分屏 / 横屏左右分屏。
+    - 两个可拖动的取样圈：样板区 / 调整区
+    - 实时对比两点的颜色差 ΔE
+    - 差量配方：实时显示要把当前色调成样板色，还需添加哪些颜料
+    - 取样大小可调；所有颜色先过白卡校色
     """
 
     def __init__(self, camera_view, **kwargs):
@@ -773,167 +1208,202 @@ class AiMixScreen(BoxLayout):
         self.advisor = ColorAdvisor()
         self.wb = WhiteBalance()
 
-        self._target = None       # 目标色（校正后 Color）
-        self._target_raw = None   # 目标色原始采样
+        self._sample_kind = None   # 当前拖动的是哪个圈: "sample"/"current"
+        self._target = None        # 样板色（校正后 Color）
+        self._current = None       # 当前色（校正后 Color）
+        self._corrected = None     # 矫正色（AI 理想配方色）
+        self._mode = "sample"      # 预览模式: "correct"/"sample"/"current"
+        self._wet = False          # 潮物检测
+        self._composition = []     # [(pigment, ratio), ...] 渐增差量配方
         self._sampling_interval = None
         self._advice_counter = 0
+        self._radius = 12          # 取样半径
+        self._size_pct = 50
         self.on_close = None
-
-        # 暂存并替换取色回调：AI 模式下点击画面 = 对焦锁定目标色
-        self._orig_pick_cb = camera_view.on_color_picked
-        camera_view.on_color_picked = self._on_pick_target
 
         self._build_ui()
 
     def _build_ui(self):
-        # ── 顶栏 ──
-        bar = BoxLayout(size_hint=(1, None), height=dp(42), spacing=dp(6), padding=dp(6))
+        D = DARK
+        # ── 顶栏（深色，参考图 2）──
+        bar = BoxLayout(size_hint=(1, None), height=dp(48), spacing=dp(6), padding=(dp(6), dp(0), dp(6), dp(0)))
         with bar.canvas.before:
-            GraphicsColor(0.13, 0.13, 0.16, 1)
+            GraphicsColor(D["title_bg"][0], D["title_bg"][1], D["title_bg"][2], 1)
             self._bar_bg = Rectangle(pos=bar.pos, size=bar.size)
         bar.bind(pos=self._resize_bar, size=self._resize_bar)
 
         self.btn_back = Button(
-            text="← 返回", size_hint=(None, 1), width=dp(62),
-            font_size=dp(13), background_color=(0.4, 0.25, 0.2, 1),
+            text="‹ 返回", size_hint=(None, 1), width=dp(62),
+            font_size=dp(14), color=D["text"], background_color=(0, 0, 0, 0),
+            background_normal="",
         )
         self.btn_back.bind(on_release=lambda b: self.request_close())
         bar.add_widget(self.btn_back)
 
         self.bar_title = Label(
             text="AI 辅助调色", size_hint=(1, 1),
-            font_size=dp(15), color=(1, 1, 1, 1), bold=True,
+            font_size=dp(16), color=D["text"], bold=True,
         )
         bar.add_widget(self.bar_title)
 
         self.btn_cal = Button(
-            text="白卡校色", size_hint=(None, 1), width=dp(70),
-            font_size=dp(12), background_color=(0.2, 0.5, 0.45, 1),
+            text="白卡校色", size_hint=(None, 1), width=dp(82),
+            font_size=dp(12), color=(0.04, 0.07, 0.12, 1), background_color=D["accent"],
+            background_normal="",
         )
         self.btn_cal.bind(on_release=lambda b: self._do_calibrate())
         bar.add_widget(self.btn_cal)
 
         self.bar_status = Label(
-            text="", size_hint=(None, 1), width=dp(70),
-            font_size=dp(10), color=(0.7, 0.9, 0.7, 1),
+            text="", size_hint=(None, 1), width=dp(54),
+            font_size=dp(11), color=D["accent"],
         )
         bar.add_widget(self.bar_status)
         self.add_widget(bar)
 
         # ── 主体：竖屏上下 / 横屏左右 ──
         landscape = Window.width > Window.height
-        body = BoxLayout(orientation="horizontal" if landscape else "vertical", spacing=1)
+        body = BoxLayout(orientation="horizontal" if landscape else "vertical", spacing=dp(6), padding=dp(6))
         body.size_hint = (1, 1)
         self.add_widget(body)
 
-        # 摄像头区（CameraView 由主界面 reparent 进来，FocusBox 叠加其上）
+        # 摄像头区（CameraView 由主界面 reparent 进来，取样圈叠加其上）
         self.cam_area = FloatLayout()
-        self.cam_area.size_hint = (0.55, 1) if landscape else (1, 0.55)
+        self.cam_area.size_hint = (0.62, 1) if landscape else (1, 0.5)
         body.add_widget(self.cam_area)
-        self.focus_box = FocusBox()
 
-        # 信息面板（可滚动）
+        # 信息面板（可滚动，深色卡片）
         scroll = ScrollView()
-        scroll.size_hint = (0.45, 1) if landscape else (1, 0.45)
+        scroll.size_hint = (0.38, 1) if landscape else (1, 0.5)
+        scroll.bar_width = dp(2)
         body.add_widget(scroll)
 
         self.info_box = BoxLayout(
             orientation="vertical", size_hint_y=None,
-            spacing=dp(4), padding=dp(8),
+            spacing=dp(6), padding=(dp(2), dp(2), dp(2), dp(2)),
         )
         self.info_box.bind(minimum_height=self.info_box.setter("height"))
         scroll.add_widget(self.info_box)
 
-        # 目标色 | 当前色浆 并排
-        row = BoxLayout(orientation="horizontal", spacing=dp(8),
-                        size_hint_y=None, height=dp(76))
-        self.target_block = ColorBlock("目标色（点击对焦）")
-        self.current_block = ColorBlock("当前色浆（中心准星）")
-        row.add_widget(self.target_block)
-        row.add_widget(self.current_block)
-        self.info_box.add_widget(row)
+        # —— 色差 + 实时预览 卡片（参考图 2）——
+        pc = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(4))
+        pc.bind(minimum_height=pc.setter("height"))
+        _dark_card(pc)
+        self._pc = pc
+        self.info_box.add_widget(pc)
 
-        # 目标色卡匹配
-        self.card_lbl = Label(
-            text="目标色卡：--", size_hint_y=None, height=dp(18),
-            font_size=dp(11), color=(0.7, 0.85, 1, 1),
+        # 色差行
+        de_row = BoxLayout(orientation="horizontal", spacing=dp(6), size_hint_y=None, height=dp(40))
+        lbl_de = Label(
+            text="色差", size_hint=(None, 1), width=dp(52),
+            font_size=dp(13), color=D["sub"], halign="left", valign="middle",
         )
-        self.info_box.add_widget(self.card_lbl)
-
-        # 色差
+        lbl_de.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
+        de_row.add_widget(lbl_de)
         self.delta_lbl = Label(
-            text="ΔE 色差：--", size_hint_y=None, height=dp(22),
-            font_size=dp(13), color=(1, 0.9, 0.5, 1), bold=True,
+            text="ΔE = --", size_hint=(1, 1),
+            font_size=dp(24), color=D["gold"], bold=True,
+            halign="center", valign="middle",
         )
-        self.info_box.add_widget(self.delta_lbl)
-
-        # 下一步添加（颜料可视化：色块+名称+比例条+比例）
-        advice_title = Label(
-            text="下一步添加", size_hint_y=None, height=dp(18),
-            font_size=dp(12), color=(0.62, 0.62, 0.68, 1),
+        self.delta_lbl.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
+        de_row.add_widget(self.delta_lbl)
+        pc.add_widget(de_row)
+        self._de_hint = Label(
+            text="", size_hint_y=None, height=dp(14),
+            font_size=dp(10), color=D["sub"], halign="left", valign="middle",
         )
-        self.info_box.add_widget(advice_title)
+        self._de_hint.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
+        pc.add_widget(self._de_hint)
 
-        pig_row = BoxLayout(orientation="horizontal", spacing=dp(6),
-                            size_hint_y=None, height=dp(46))
-        self.pig_swatch = SwatchWidget()
-        self.pig_swatch.size_hint = (None, 1)
-        self.pig_swatch.width = dp(46)
-        pig_row.add_widget(self.pig_swatch)
+        # 实时预览效果
+        pv_title = Label(
+            text="实时预览效果", size_hint_y=None, height=dp(16),
+            font_size=dp(12), color=D["sub"], halign="left", valign="middle",
+        )
+        pv_title.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
+        pc.add_widget(pv_title)
+        self.preview_block = SwatchWidget()
+        self.preview_block.size_hint = (1, None)
+        self.preview_block.height = dp(70)
+        pc.add_widget(self.preview_block)
+        self.preview_hex = Label(
+            text="--", size_hint_y=None, height=dp(15),
+            font_size=dp(11), color=D["text"], halign="left", valign="middle",
+        )
+        self.preview_hex.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
+        pc.add_widget(self.preview_hex)
 
-        pig_mid = BoxLayout(orientation="vertical", spacing=dp(2), size_hint=(None, 1))
-        pig_mid.width = dp(96)
-        self.pig_name_lbl = Label(
-            text="先对焦目标色", size_hint=(1, None), height=dp(20),
-            font_size=dp(13), color=(1, 1, 1, 1), bold=True,
+        # 三模式切换（矫正色/样板色/当前色）
+        mode_row = BoxLayout(orientation="horizontal", spacing=dp(6), size_hint_y=None, height=dp(32))
+        self._mode_btns = {}
+        for key, label in (("correct", "矫正色"), ("sample", "样板色"), ("current", "当前色")):
+            b = Button(
+                text=label, size_hint=(1, 1), font_size=dp(11),
+                background_normal="", color=D["text"],
+            )
+            b.bind(on_release=lambda b, k=key: self._set_mode(k))
+            self._mode_btns[key] = b
+            mode_row.add_widget(b)
+        pc.add_widget(mode_row)
+        self._paint_mode_buttons()
+
+        # —— 干/潮检测 ——
+        det_row = BoxLayout(orientation="horizontal", spacing=dp(6), size_hint_y=None, height=dp(32))
+        self.btn_dry = Button(
+            text="干物检测", size_hint=(1, 1), font_size=dp(12), background_normal="",
+        )
+        self.btn_dry.bind(on_release=lambda b: self._set_wet(False))
+        self.btn_wet = Button(
+            text="潮物检测", size_hint=(1, 1), font_size=dp(12), background_normal="",
+        )
+        self.btn_wet.bind(on_release=lambda b: self._set_wet(True))
+        det_row.add_widget(self.btn_dry)
+        det_row.add_widget(self.btn_wet)
+        self.info_box.add_widget(det_row)
+        self._paint_detect_buttons()
+
+        # —— 调节大小 ——
+        size_row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(38))
+        self.size_lbl = Label(
+            text="调节大小", size_hint=(None, 1), width=dp(66),
+            font_size=dp(12), color=D["text"], halign="left", valign="middle",
+        )
+        self.size_lbl.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
+        slider = Slider(min=4, max=30, value=self._radius, size_hint=(1, 1))
+        slider.value_track = True
+        slider.bind(value=self._on_size_change)
+        self.size_slider = slider
+        self._size_pct_lbl = Label(
+            text=f"{self._size_pct}%", size_hint=(None, 1), width=dp(44),
+            font_size=dp(13), color=D["accent"], bold=True, halign="center", valign="middle",
+        )
+        size_row.add_widget(self.size_lbl)
+        size_row.add_widget(slider)
+        size_row.add_widget(self._size_pct_lbl)
+        self.info_box.add_widget(size_row)
+
+        # —— 色彩成分分析 ——
+        comp_title = Label(
+            text="色彩成分分析", size_hint_y=None, height=dp(18),
+            font_size=dp(13), color=D["text"], bold=True,
             halign="left", valign="middle",
         )
-        self.pig_name_lbl.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
-        pig_mid.add_widget(self.pig_name_lbl)
-        self.pig_desc_lbl = Label(
-            text="点击画面锁定目标颜色", size_hint=(1, None), height=dp(15),
-            font_size=dp(10), color=(0.6, 0.6, 0.65, 1),
-            halign="left", valign="middle",
-        )
-        self.pig_desc_lbl.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
-        pig_mid.add_widget(self.pig_desc_lbl)
-        pig_row.add_widget(pig_mid)
+        comp_title.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
+        self.info_box.add_widget(comp_title)
 
-        self.pig_bar = RatioBar()
-        pig_row.add_widget(self.pig_bar)
+        self.comp_box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(4))
+        self.comp_box.bind(minimum_height=self.comp_box.setter("height"))
+        self.info_box.add_widget(self.comp_box)
 
-        self.pig_ratio_lbl = Label(
-            text="--", size_hint=(None, 1), width=dp(44),
-            font_size=dp(13), color=(1, 0.9, 0.5, 1), bold=True,
-        )
-        pig_row.add_widget(self.pig_ratio_lbl)
-        self.info_box.add_widget(pig_row)
-
-        # 预计混合后
-        exp_row = BoxLayout(orientation="horizontal", spacing=dp(8),
-                            size_hint_y=None, height=dp(76))
-        self.expect_block = ColorBlock("预计混合后")
-        self.expect_delta_lbl = Label(
-            text="", size_hint=(1, None), height=dp(34),
-            font_size=dp(11), color=(0.7, 0.9, 0.7, 1),
-        )
-        exp_row.add_widget(self.expect_block)
-        exp_row.add_widget(self.expect_delta_lbl)
-        self.info_box.add_widget(exp_row)
-
-        # 白卡状态 + 操作提示
-        self.wb_lbl = Label(
-            text=self.wb.describe(), size_hint_y=None, height=dp(16),
-            font_size=dp(10), color=(0.55, 0.55, 0.6, 1),
-        )
-        self.info_box.add_widget(self.wb_lbl)
-
+        # —— 提示 ——
         tip = Label(
-            text="提示：点击画面任意位置对焦锁定目标色；把色浆对准中心准星实时看差距",
-            size_hint_y=None, height=dp(28), font_size=dp(10),
-            color=(0.5, 0.5, 0.55, 1),
+            text="拖动两个圆圈取样：样板区=想要的颜色，调整区=当前颜料色。开启潮物检测会将湿料自动校正为干态后再算配比建议",
+            size_hint_y=None, height=dp(34), font_size=dp(10),
+            color=D["sub"], halign="left", valign="middle",
         )
+        tip.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
         self.info_box.add_widget(tip)
+        self.info_box.height = self.info_box.minimum_height
 
     def _resize_bar(self, inst, val):
         self._bar_bg.pos = inst.pos
@@ -941,144 +1411,244 @@ class AiMixScreen(BoxLayout):
 
     def open(self, on_close=None):
         self.on_close = on_close or (lambda: None)
+        # 两个取样圈初始放在画面左右
+        self.sample_ring = DragRing("样板区", DARK["red"])
+        self.current_ring = DragRing("调整区", (1.0, 1.0, 1.0, 1))
+        for ring in (self.sample_ring, self.current_ring):
+            ring.on_drag = self._ring_moved
+        self.cam_area.add_widget(self.sample_ring)
+        self.cam_area.add_widget(self.current_ring)
+        Clock.schedule_once(self._place_rings, 0)
         self._sampling_interval = Clock.schedule_interval(self._poll, 1.0 / 15)
 
+    def _place_rings(self):
+        if self.cam_area.width <= 1 or self.cam_area.height <= 1:
+            return
+        self.sample_ring.center = (self.cam_area.width * 0.3, self.cam_area.height * 0.5)
+        self.current_ring.center = (self.cam_area.width * 0.7, self.cam_area.height * 0.5)
+
     def close(self):
-        """仅清理（计时器 + 恢复回调），不触发 on_close，避免递归。"""
         if self._sampling_interval is not None:
             Clock.unschedule(self._sampling_interval)
             self._sampling_interval = None
-        if self.camera_view is not None and getattr(self, "_orig_pick_cb", None) is not None:
-            self.camera_view.on_color_picked = self._orig_pick_cb
-            self._orig_pick_cb = None
+        for name in ("sample_ring", "current_ring"):
+            ring = getattr(self, name, None)
+            if ring is not None and ring.parent is not None:
+                ring.parent.remove_widget(ring)
 
     def request_close(self):
-        """请求关闭：清理后通知 on_close（由主界面完成移除与摄像头归还）。"""
         self.close()
         cb = getattr(self, "on_close", None)
         if cb:
             cb()
 
     def shutdown(self):
-        """shutdown = close（清理计时器与回调，不触发 on_close，防止递归）。"""
         self.close()
 
-    # ── 取色 ──
+    # ── 取样 ──
 
-    def _on_pick_target(self, color):
-        """点击画面：对焦锁定目标色 + 对焦框动画。"""
-        if color is None:
-            return
-        self._target_raw = color
-        self._target = self.wb.apply(color)
-        self.target_block.set_color(self._target, nearest_named_color(self._target))
-        self._update_card_lbl()
-        # 对焦框画在准星位置（CameraView 已把准星移到点击处，坐标与 cam_area 一致）
-        try:
-            ch = self.camera_view.crosshair
-            self.focus_box.show_at(ch.center_x, ch.center_y)
-        except Exception:
-            pass
-        corrected, _ = self._center_color()
-        if corrected is not None:
-            self._render_advice(corrected)
+    def _ring_moved(self):
+        self._poll(None)
 
-    def _center_color(self, radius=12):
-        """画面中心（准星）采样，返回校正后与原始颜色。"""
-        if self.camera_view is None or self.camera_view._frame is None:
-            return None, None
-        h, w = self.camera_view._frame.shape[:2]
-        raw = average_color_region(self.camera_view._frame, (w // 2, h // 2), radius=radius)
-        return self.wb.apply(raw), raw
+    def _surface_adjust(self, color):
+        """湿态→干态近似校正：只对调整区（正在混合的湿料）生效。
+
+        湿漆比干漆更深、更饱和；开启潮物检测时，把湿读色轻微提亮、
+        去饱和，得到接近干态的等效色，再与干态样板比较。
+        """
+        if not self._wet or color is None:
+            return color
+        r, g, b = color.rgb_normalized
+        # 轻微提高明度（向白靠拢）并压缩饱和度，模拟干燥后的变化
+        lift = 0.06
+        r = r + (1.0 - r) * lift
+        g = g + (1.0 - g) * lift
+        b = b + (1.0 - b) * lift
+        return Color(int(max(0, min(255, r * 255))),
+                     int(max(0, min(255, g * 255))),
+                     int(max(0, min(255, b * 255))))
+
+    def _sample_color(self, ring, is_current=False):
+        """采样某个取样圈中心点的原始颜色，返回校正后 Color。"""
+        cv = self.camera_view
+        if cv is None or ring is None:
+            return None
+        raw = cv.sample_at(ring.center_x, ring.center_y, radius=self._radius)
+        if raw is None:
+            return None
+        corrected = self.wb.apply(raw)
+        if is_current:
+            corrected = self._surface_adjust(corrected)
+        return corrected
 
     # ── 校色 ──
 
     def _do_calibrate(self):
-        """把画面中心对标准灰卡采样作为校色基准。"""
-        raw = None
-        if self.camera_view is not None and self.camera_view._frame is not None:
-            h, w = self.camera_view._frame.shape[:2]
-            raw = average_color_region(self.camera_view._frame, (w // 2, h // 2), radius=15)
+        if self.camera_view is None:
+            return
+        raw = self.camera_view.sample_at(self.camera_view.center_x, self.camera_view.center_y, radius=15)
         if raw is None:
             self._set_status("无画面")
             return
         try:
             self.wb.calibrate(raw)
             self._set_status("已校色")
-            self.wb_lbl.text = self.wb.describe()
-            # 校色改变后重算目标色
-            if self._target is not None and self._target_raw is not None:
-                self._target = self.wb.apply(self._target_raw)
-                self.target_block.set_color(self._target, nearest_named_color(self._target))
-                self._update_card_lbl()
+            self._poll(None)
         except Exception:
             self._set_status("校色失败")
 
     def _set_status(self, text):
         self.bar_status.text = text
 
-    def _update_card_lbl(self):
-        """刷新目标色的商用色卡匹配显示。"""
-        if self._target is None:
-            self.card_lbl.text = "目标色卡：--"
-            return
-        m = best_match(self._target)
-        if m is None:
-            self.card_lbl.text = "目标色卡：--"
-        else:
-            self.card_lbl.text = f"目标色卡：{m.display}  ΔE={m.delta_e:.1f}"
+    def _on_size_change(self, inst, value):
+        self._radius = int(value)
+        self._size_pct = int((self._radius - 4) * 100 // 26)
+        if hasattr(self, "_size_pct_lbl"):
+            self._size_pct_lbl.text = f"{max(0, min(100, self._size_pct))}%"
+        for ring in (getattr(self, "sample_ring", None), getattr(self, "current_ring", None)):
+            if ring is not None:
+                ring.set_radius(dp(26) * self._radius / 12)
 
-    # ── 实时轮询 ──
+    # ── 实时轮询（每帧刷新两点颜色、ΔE 与配方）──
 
     def _poll(self, dt):
-        if self.camera_view is None:
+        if self.camera_view is None or self.camera_view._frame is None:
             return
-        corrected, _ = self._center_color()
-        if corrected is None:
+        if not hasattr(self, "sample_ring") or not hasattr(self, "current_ring"):
             return
-        self.current_block.set_color(corrected, nearest_named_color(corrected))
-
-        if self._target is not None:
-            de = self._target.distance(corrected)
-            if de <= 2.0:
-                self.delta_lbl.text = f"ΔE 色差：{de:.1f}  ✓ 已非常接近"
-            else:
-                self.delta_lbl.text = f"ΔE 色差：{de:.1f}"
-            # 颜料建议计算量较大，每 5 帧重算一次
-            self._advice_counter += 1
-            if self._advice_counter % 5 == 0:
-                self._render_advice(corrected)
+        sample = self._sample_color(self.sample_ring, is_current=False)
+        current = self._sample_color(self.current_ring, is_current=True)
+        if sample is None or current is None:
+            return
+        self._target = sample
+        self._current = current
+        de = sample.distance(current)
+        self.delta_lbl.text = f"ΔE = {de:.1f}"
+        if de <= 2:
+            hint = "完美匹配 ✓"
+        elif de <= 6:
+            hint = "已接近，可微调"
         else:
-            self.delta_lbl.text = "ΔE 色差：--"
+            hint = "差异较大，按下方配方添加色料"
+        self._de_hint.text = "提示：" + hint
+        # 差量配方每 5 帧重算一次；拖动时立即重算
+        self._advice_counter += 1
+        if dt is None or self._advice_counter % 5 == 0:
+            self._greedy_recipe(current, sample)
+            self._render_composition()
+            self._update_preview()
 
-    # ── 建议渲染 ──
+    # ── 预览模式（矫正色/样板色/当前色）──
 
-    def _render_advice(self, current):
-        if self._target is None:
+    def _set_mode(self, key):
+        self._mode = key
+        self._paint_mode_buttons()
+        self._update_preview()
+
+    def _paint_mode_buttons(self):
+        for key, b in self._mode_btns.items():
+            if key == self._mode:
+                b.background_color = DARK["accent"]
+                b.color = (0.04, 0.07, 0.12, 1)
+            else:
+                b.background_color = DARK["sel_bg"]
+                b.color = DARK["text"]
+
+    def _preview_color(self):
+        if self._mode == "current":
+            return self._current
+        if self._mode == "correct":
+            return self._corrected or self._target
+        return self._target
+
+    def _update_preview(self):
+        c = self._preview_color()
+        if c is None:
+            self.preview_block.set_color(None)
+            self.preview_hex.text = "--"
             return
-        suggestion = self.advisor.suggest_next_pigment(current, self._target)
+        self.preview_block.set_color(c)
+        self.preview_hex.text = c.hex + "  " + nearest_named_color(c)
 
-        if suggestion is None:
-            self.pig_swatch.set_color(None)
-            self.pig_name_lbl.text = "已接近目标"
-            self.pig_desc_lbl.text = "无需继续加色，或换更接近的基色微调"
-            self.pig_bar.set_ratio(0, None)
-            self.pig_ratio_lbl.text = "--"
-            self.expect_block.set_color(None)
-            self.expect_delta_lbl.text = ""
-            return
+    # ── 干/潮物检测 ──
 
-        p = suggestion["pigment"]
-        ratio = suggestion["ratio"]
-        self.pig_swatch.set_color(p.color)
-        self.pig_name_lbl.text = p.name
-        self.pig_desc_lbl.text = p.description or "基色颜料"
-        self.pig_bar.set_ratio(ratio, p.color)
-        self.pig_ratio_lbl.text = f"{ratio * 100:.0f}%"
-        self.expect_block.set_color(suggestion["mixed"])
-        self.expect_delta_lbl.text = (
-            f"加入后 ΔE：{self._target.distance(current):.1f} → {suggestion['delta_e']:.1f}"
-        )
+    def _set_wet(self, wet):
+        self._wet = wet
+        self._paint_detect_buttons()
+        self.bar_status.text = "潮物模式" if wet else ""
+        # 切换后立即重算 ΔE 与配比建议
+        self._poll(None)
+
+    def _paint_detect_buttons(self):
+        if self._wet:
+            self.btn_dry.background_color = DARK["sel_bg"]
+            self.btn_dry.color = DARK["text"]
+            self.btn_wet.background_color = DARK["orange"]
+            self.btn_wet.color = (1, 1, 1, 1)
+        else:
+            self.btn_dry.background_color = DARK["orange"]
+            self.btn_dry.color = (1, 1, 1, 1)
+            self.btn_wet.background_color = DARK["sel_bg"]
+            self.btn_wet.color = DARK["text"]
+
+    # ── 渐增差量配方（资源贪心，最多 3 步）──
+
+    def _greedy_recipe(self, current, target, max_steps=3):
+        steps = []
+        cur = current
+        for _ in range(max_steps):
+            if cur.distance(target) <= 3.0:
+                break
+            sug = self.advisor.suggest_next_pigment(cur, target)
+            if sug is None:
+                break
+            p = sug["pigment"]
+            ratio = sug["ratio"]
+            cur = ColorMixer.mix_subtractive([cur, p.color], [1 - ratio, ratio])
+            steps.append((p, ratio, sug["delta_e"]))
+        self._corrected = cur
+        self._composition = steps
+        return steps
+
+    # ── 色彩成分分析渲染（参考图 2：色点 + 进度条 + 增减% ）──
+
+    def _render_composition(self):
+        D = DARK
+        self.comp_box.clear_widgets()
+        if self._composition:
+            for p, ratio, de in self._composition:
+                row = BoxLayout(orientation="horizontal", spacing=dp(6), size_hint_y=None, height=dp(26))
+                sw = SwatchWidget()
+                sw.size_hint = (None, 1)
+                sw.width = dp(18)
+                sw.set_color(p.color)
+                row.add_widget(sw)
+                nm = Label(
+                    text=p.name, size_hint=(None, 1), width=dp(46),
+                    font_size=dp(11), color=D["text"], bold=True,
+                    halign="left", valign="middle",
+                )
+                nm.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
+                row.add_widget(nm)
+                bar = RatioBar(size_hint=(1, 1))
+                bar.set_ratio(ratio, p.color)
+                row.add_widget(bar)
+                val = Label(
+                    text=f"+{ratio * 100:.1f}%", size_hint=(None, 1), width=dp(52),
+                    font_size=dp(12), color=D["gold"], bold=True,
+                    halign="center", valign="middle",
+                )
+                row.add_widget(val)
+                self.comp_box.add_widget(row)
+        else:
+            l = Label(
+                text="无需添加，已接近样板色", size_hint_y=None, height=dp(22),
+                font_size=dp(11), color=D["accent"], halign="left", valign="middle",
+            )
+            l.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
+            self.comp_box.add_widget(l)
+        self.comp_box.height = self.comp_box.minimum_height
+        self.info_box.height = self.info_box.minimum_height
 
 
 # ──────────────────────────────────────────────
@@ -1090,7 +1660,7 @@ class ColorAssistantApp(App):
 
     def build(self):
         self.title = "AI 调色助手"
-        Window.clearcolor = (0.12, 0.12, 0.14, 1)
+        Window.clearcolor = THEME["bg"]
 
         # 根容器：FloatLayout，用于承载主界面 + AI调色全屏覆盖层
         self.root = FloatLayout()
@@ -1098,18 +1668,18 @@ class ColorAssistantApp(App):
         self.main_box.size_hint = (1, 1)
         self.root.add_widget(self.main_box)
 
-        # 顶部标题栏
-        title_bar = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(8), padding=dp(8))
+        # 顶部标题栏（iOS 导航栏样式）
+        title_bar = BoxLayout(size_hint=(1, None), height=dp(48), spacing=dp(8), padding=(dp(6), dp(0), dp(6), dp(0)))
         with title_bar.canvas.before:
-            GraphicsColor(0.15, 0.15, 0.17, 1)
+            GraphicsColor(*THEME["card"])
             self._title_bg = Rectangle(pos=title_bar.pos, size=title_bar.size)
         title_bar.bind(pos=self._update_title_bg, size=self._update_title_bg)
 
         title_label = Label(
             text="AI 调色助手",
             size_hint=(1, 1),
-            font_size=dp(16),
-            color=(1, 1, 1, 1),
+            font_size=dp(17),
+            color=THEME["label"],
             bold=True,
         )
         title_bar.add_widget(title_label)
@@ -1117,9 +1687,11 @@ class ColorAssistantApp(App):
         btn_report = Button(
             text="完整报告",
             size_hint=(None, 1),
-            width=dp(80),
-            font_size=dp(12),
-            background_color=(0.25, 0.55, 0.85, 1),
+            width=dp(84),
+            font_size=dp(13),
+            background_color=THEME["primary"],
+            background_normal="",
+            color=(1, 1, 1, 1),
         )
         btn_report.bind(on_release=lambda btn: self._on_report())
         title_bar.add_widget(btn_report)
@@ -1128,11 +1700,11 @@ class ColorAssistantApp(App):
 
         # 主体区域（竖屏：摄像头 55% / 信息 45%）
         if Window.width > Window.height and Window.width > 600:
-            body = BoxLayout(orientation="horizontal", spacing=1)
+            body = BoxLayout(orientation="horizontal", spacing=dp(8), padding=dp(8))
             self.camera_view = CameraView(on_color_picked=self._on_color_picked, size_hint=(0.55, 1))
             self.info_panel = InfoPanel(size_hint=(0.45, 1))
         else:
-            body = BoxLayout(orientation="vertical", spacing=1)
+            body = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(8))
             self.camera_view = CameraView(on_color_picked=self._on_color_picked, size_hint=(1, 0.55))
             self.info_panel = InfoPanel(size_hint=(1, 0.45))
 
@@ -1141,31 +1713,37 @@ class ColorAssistantApp(App):
         self._body = body
         self.main_box.add_widget(body)
 
-        # 底部工具栏
-        toolbar = BoxLayout(size_hint=(1, None), height=dp(48), spacing=dp(6), padding=dp(8))
+        # 底部工具栏（iOS 浅色卡片风格）
+        toolbar = BoxLayout(size_hint=(1, None), height=dp(56), spacing=dp(8), padding=(dp(10), dp(8), dp(10), dp(8)))
         with toolbar.canvas.before:
-            GraphicsColor(0.15, 0.15, 0.17, 1)
+            GraphicsColor(*THEME["card"])
             self._toolbar_bg = Rectangle(pos=toolbar.pos, size=toolbar.size)
         toolbar.bind(pos=self._update_toolbar_bg, size=self._update_toolbar_bg)
 
-        btn_center = Button(text="中心取色", size_hint=(1, 1), font_size=dp(13), background_color=(0.2, 0.6, 0.4, 1))
-        btn_center.bind(on_release=lambda btn: self._on_center_pick())
-        toolbar.add_widget(btn_center)
+        def _btn(text, color, callback):
+            b = Button(
+                text=text, size_hint=(1, 1), font_size=dp(13),
+                background_color=color, background_normal="", color=(1, 1, 1, 1),
+            )
+            b.bind(on_release=callback)
+            return b
 
-        btn_dominant = Button(text="提取主色", size_hint=(1, 1), font_size=dp(13), background_color=(0.6, 0.4, 0.2, 1))
-        btn_dominant.bind(on_release=lambda btn: self._on_dominant_pick())
-        toolbar.add_widget(btn_dominant)
+        toolbar.add_widget(_btn("中心取色", THEME["primary"], lambda b: self._on_center_pick()))
+        toolbar.add_widget(_btn("提取主色", THEME["warning"], lambda b: self._on_dominant_pick()))
+        toolbar.add_widget(_btn("AI辅助调色", (0.42, 0.42, 0.9, 1), lambda b: self._on_open_mix()))
 
-        btn_ai = Button(text="AI辅助调色", size_hint=(1, 1), font_size=dp(13), background_color=(0.55, 0.3, 0.65, 1))
-        btn_ai.bind(on_release=lambda btn: self._on_open_mix())
-        toolbar.add_widget(btn_ai)
-
-        btn_rotate = Button(text="旋转画面", size_hint=(None, 1), width=dp(80), font_size=dp(13), background_color=(0.35, 0.45, 0.6, 1))
-        btn_rotate.bind(on_release=lambda btn: self._on_rotate())
+        btn_rotate = Button(
+            text="旋转画面", size_hint=(None, 1), width=dp(80), font_size=dp(12),
+            background_color=(0.55, 0.55, 0.6, 1), background_normal="", color=(1, 1, 1, 1),
+        )
+        btn_rotate.bind(on_release=lambda b: self._on_rotate())
         toolbar.add_widget(btn_rotate)
 
-        btn_log = Button(text="日志", size_hint=(None, 1), width=dp(56), font_size=dp(13), background_color=(0.25, 0.25, 0.35, 1))
-        btn_log.bind(on_release=lambda btn: self._on_show_crash_path())
+        btn_log = Button(
+            text="日志", size_hint=(None, 1), width=dp(52), font_size=dp(12),
+            background_color=THEME["label_2"], background_normal="", color=(1, 1, 1, 1),
+        )
+        btn_log.bind(on_release=lambda b: self._on_show_crash_path())
         toolbar.add_widget(btn_log)
 
         self.main_box.add_widget(toolbar)
@@ -1234,9 +1812,8 @@ class ColorAssistantApp(App):
         self.mix_screen.pos_hint = {"x": 0, "y": 0}
         self.root.add_widget(self.mix_screen)
 
-        # 摄像头在下层，对焦框叠加其上
+        # 摄像头在下层，取样圈在 AiMixScreen.open() 里叠加到 cam_area
         self.mix_screen.cam_area.add_widget(self.camera_view)
-        self.mix_screen.cam_area.add_widget(self.mix_screen.focus_box)
 
         self.mix_screen.open(on_close=self._on_close_mix)
 
