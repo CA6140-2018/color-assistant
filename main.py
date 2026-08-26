@@ -22,13 +22,22 @@ def _find_cjk_font():
     candidates = [
         os.path.join(_FONT_DIR, "NotoSansSC-Regular.otf"),
         os.path.join(_FONT_DIR, "NotoSansSC-Regular.ttf"),
+        # MIUI 系统字体（视觉接近苹方）
+        "/system/fonts/MiSans-Regular.ttf",
+        "/system/fonts/MiSans.ttf",
+        "/system/fonts/MiSans-Regular.otf",
+        # Android 通用中文字体
         "/system/fonts/NotoSansSC-Regular.otf",
         "/system/fonts/NotoSansCJK-Regular.ttc",
         "/system/fonts/DroidSansFallback.ttf",
+        "/system/fonts/NotoSansSC-Regular.ttf",
+        # Windows
         r"C:\Windows\Fonts\msyh.ttc",
         r"C:\Windows\Fonts\msyh.ttf",
         r"C:\Windows\Fonts\simhei.ttf",
+        # Linux
         "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
     ]
     for path in candidates:
         if os.path.exists(path):
