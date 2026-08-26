@@ -788,8 +788,9 @@ class AiMixScreen(BoxLayout):
         Clock.schedule_once(self._place_markers, 0)
         self._sampling_interval = Clock.schedule_interval(self._poll, 1.0 / 10)
 
-    def _place_markers(self):
+    def _place_markers(self, dt=None):
         if self.cam_area.width <= 1:
+            Clock.schedule_once(self._place_markers, 0.2)
             return
         self.marker_sample.center = (self.cam_area.width * 0.3, self.cam_area.height * 0.5)
         self.marker_current.center = (self.cam_area.width * 0.7, self.cam_area.height * 0.5)
