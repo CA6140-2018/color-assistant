@@ -83,31 +83,38 @@ from color_engine import (
 )
 from ai_assistant import ColorAdvisor
 
-# ── 主题色 ──
+# ── 主题色（iOS 风格）──
 THEME = {
-    "bg": (0.94, 0.94, 0.96, 1),
+    "bg": (0.949, 0.949, 0.961, 1),       # 系统灰
     "card": (1, 1, 1, 1),
-    "label": (0.12, 0.12, 0.15, 1),
-    "label_2": (0.45, 0.45, 0.5, 1),
-    "primary": (0.0, 0.48, 1, 1),
-    "success": (0.2, 0.78, 0.35, 1),
-    "warning": (1, 0.58, 0, 1),
-    "danger": (1, 0.23, 0.19, 1),
+    "card_accent": (0.0, 0.48, 1, 0.08),   # 卡片顶部蓝色强调线
+    "label": (0.11, 0.11, 0.12, 1),        # 系统黑
+    "label_2": (0.556, 0.557, 0.576, 1),   # 系统灰
+    "primary": (0.0, 0.478, 1, 1),         # iOS 蓝 #007AFF
+    "success": (0.203, 0.78, 0.349, 1),    # iOS 绿 #34C759
+    "warning": (1, 0.584, 0, 1),           # iOS 橙 #FF9500
+    "danger": (1, 0.231, 0.188, 1),        # iOS 红 #FF3B30
+    "separator": (0.78, 0.78, 0.80, 1),    # 分割线
+    "shadow": (0, 0, 0, 0.06),             # 阴影色
 }
 DARK = {
-    "bg": (0.09, 0.10, 0.13, 1),
-    "card": (0.13, 0.15, 0.19, 1),
-    "bar": (0.10, 0.11, 0.15, 1),
-    "text": (0.92, 0.94, 0.97, 1),
-    "sub": (0.55, 0.60, 0.68, 1),
+    "bg": (0.09, 0.09, 0.11, 1),          # 系统深色 bg
+    "card": (0.14, 0.14, 0.16, 1),
+    "bar": (0.10, 0.10, 0.12, 1),
+    "text": (0.96, 0.96, 0.97, 1),
+    "sub": (0.55, 0.55, 0.57, 1),
     "gold": (1, 0.84, 0.25, 1),
-    "accent": (0.35, 0.78, 1, 1),
+    "accent": (0.40, 0.80, 1, 1),         # 亮蓝
+    "card_border": (0.20, 0.20, 0.23, 1), # 卡片边框色
 }
 
 
-def _bg(widget, rgba, radius=0):
+def _bg(widget, rgba, radius=0, shadow=False):
     """给 widget 画一个跟随 pos/size 的矩形背景（只用安全图元）。"""
     with widget.canvas.before:
+        if shadow:
+            GColor(0, 0, 0, 0.05)
+            RoundedRectangle(pos=(widget.x, widget.y - dp(2)), size=widget.size, radius=[radius or dp(10)])
         GColor(*rgba)
         if radius:
             rect = RoundedRectangle(pos=widget.pos, size=widget.size, radius=[radius])
@@ -118,6 +125,32 @@ def _bg(widget, rgba, radius=0):
         size=lambda i, v, r=rect: setattr(r, "size", i.size),
     )
     return rect
+
+
+def _card_bg(widget, radius=dp(12)):
+    """iOS 风格卡片背景：白色圆角 + 顶部蓝色强调线。"""
+    with widget.canvas.before:
+        GColor(*THEME["shadow"])
+        RoundedRectangle(pos=(widget.x, widget.y - dp(1)), size=widget.size, radius=[radius])
+        GColor(*THEME["card"])
+        RoundedRectangle(pos=widget.pos, size=widget.size, radius=[radius])
+        GColor(*THEME["card_accent"])
+        RoundedRectangle(pos=(widget.x + dp(16), widget.y + widget.height - dp(3)), size=(dp(28), dp(3)), radius=[dp(1.5)])
+    widget.bind(
+        pos=lambda i, v: _update_card_bg(i, v, radius),
+        size=lambda i, v: _update_card_bg(i, v, radius),
+    )
+
+
+def _update_card_bg(widget, val, radius):
+    widget.canvas.before.clear()
+    with widget.canvas.before:
+        GColor(*THEME["shadow"])
+        RoundedRectangle(pos=(widget.x, widget.y - dp(1)), size=widget.size, radius=[radius])
+        GColor(*THEME["card"])
+        RoundedRectangle(pos=widget.pos, size=widget.size, radius=[radius])
+        GColor(*THEME["card_accent"])
+        RoundedRectangle(pos=(widget.x + dp(16), widget.y + widget.height - dp(3)), size=(dp(28), dp(3)), radius=[dp(1.5)])
 
 
 def _lbl(text, size=None, font_size=None, color=None, bold=False, halign="left", width=None):
@@ -136,6 +169,27 @@ def _lbl(text, size=None, font_size=None, color=None, bold=False, halign="left",
     )
     l.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
     return l
+
+
+def _update_sep(widget, val):
+    widget.canvas.after.clear()
+    with widget.canvas.after:
+        GColor(0.78, 0.78, 0.80, 1)
+        Rectangle(pos=(widget.x, widget.y), size=(widget.width, 0.5))
+
+
+def _update_toolbar_sep(widget, val):
+    widget.canvas.after.clear()
+    with widget.canvas.after:
+        GColor(0.78, 0.78, 0.80, 1)
+        Rectangle(pos=(widget.x, widget.y + widget.height), size=(widget.width, 0.5))
+
+
+def _update_mix_sep(widget, val):
+    widget.canvas.after.clear()
+    with widget.canvas.after:
+        GColor(0.22, 0.22, 0.25, 1)
+        Rectangle(pos=(widget.x, widget.y), size=(widget.width, 0.5))
 
 
 # ──────────────────────────────────────────────
@@ -194,16 +248,29 @@ class CameraView(FloatLayout):
         self.tex_view.set_rotation(self._rotation)
         self.add_widget(self.tex_view)
 
-        self._placeholder = Label(
-            text="摄像头启动中…", font_size=dp(14), color=(0.45, 0.45, 0.5, 1),
-        )
+        self._placeholder = BoxLayout(orientation="vertical", size_hint=(None, None), size=(dp(120), dp(120)),
+                                       pos_hint={"center_x": 0.5, "center_y": 0.5})
+        self._placeholder.add_widget(Label(
+            text="📷", font_size=dp(40), size_hint=(1, None), height=dp(50),
+        ))
+        self._placeholder.add_widget(Label(
+            text="摄像头启动中…", font_size=dp(13), color=(0.55, 0.55, 0.57, 1),
+            size_hint=(1, None), height=dp(24),
+        ))
         self.add_widget(self._placeholder)
 
         self.crosshair = Label(
-            text="＋", font_size=dp(26), color=(1, 1, 1, 0.95),
-            size_hint=(None, None), size=(dp(34), dp(34)),
-            outline_width=2, outline_color=(0, 0, 0, 0.8),
+            text="＋", font_size=dp(28), color=(1, 1, 1, 0.95),
+            size_hint=(None, None), size=(dp(36), dp(36)),
+            bold=True,
         )
+        # 准星周围加一圈深色轮廓（用两个Label叠加效果）
+        self.crosshair_outline = Label(
+            text="＋", font_size=dp(32), color=(0, 0, 0, 0.5),
+            size_hint=(None, None), size=(dp(40), dp(40)),
+            bold=True,
+        )
+        self.add_widget(self.crosshair_outline)
         self.add_widget(self.crosshair)
         self.bind(size=self._center_crosshair)
 
@@ -216,6 +283,7 @@ class CameraView(FloatLayout):
 
     def _center_crosshair(self, *args):
         self.crosshair.center = self.center
+        self.crosshair_outline.center = self.center
 
     def rotate_cw(self):
         if HAS_CV2 and not IS_ANDROID:
@@ -337,8 +405,10 @@ class CameraView(FloatLayout):
             pass
 
     def _on_first_frame(self):
-        if self._placeholder.parent is not None:
-            self.remove_widget(self._placeholder)
+        if self._placeholder.parent is not None and self._placeholder.opacity > 0.99:
+            # 淡出占位
+            self._placeholder.opacity = 0
+            Clock.schedule_once(lambda dt: self.remove_widget(self._placeholder) if self._placeholder.parent is not None else None, 0.1)
         if not getattr(self, "_geom_logged", False):
             self._geom_logged = True
             crash_log.write_crash(
@@ -466,7 +536,7 @@ class InfoPanel(ScrollView):
         self.do_scroll_x = False
         self.bar_width = dp(2)
         self.container = BoxLayout(
-            orientation="vertical", size_hint_y=None, spacing=dp(10), padding=dp(6),
+            orientation="vertical", size_hint_y=None, spacing=dp(12), padding=(dp(8), dp(8), dp(8), dp(12)),
         )
         self.container.bind(minimum_height=self.container.setter("height"))
         self.add_widget(self.container)
@@ -476,11 +546,11 @@ class InfoPanel(ScrollView):
         self.container.clear_widgets()
 
     def _card(self, title=None):
-        body = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6), padding=dp(12))
+        body = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(8), padding=dp(14))
         body.bind(minimum_height=body.setter("height"))
-        _bg(body, THEME["card"], radius=dp(10))
+        _card_bg(body)
         if title:
-            body.add_widget(_lbl(title, size=dp(22), font_size=dp(13), bold=True))
+            body.add_widget(_lbl(title, size=dp(26), font_size=dp(14), bold=True, color=THEME["label"]))
         self.container.add_widget(body)
         return body
 
@@ -513,36 +583,49 @@ class InfoPanel(ScrollView):
         self._clear()
         analysis = self.advisor.analyze(color)
 
-        # 采集颜色
+        # 采集颜色（大色块 + 名称 + HEX）
         c = self._card()
-        row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(44), spacing=dp(10))
-        sw = SwatchWidget(size_hint=(None, 1), width=dp(44))
+        row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(52), spacing=dp(12))
+        sw = SwatchWidget(size_hint=(None, 1), width=dp(52))
         sw.set_color(color)
         row.add_widget(sw)
-        row.add_widget(_lbl(f"[b]{analysis.hex_code}[/b]  「{analysis.name}」", font_size=dp(15)))
-        c.add_widget(row)
-        c.add_widget(_lbl(
+        name_col = BoxLayout(orientation="vertical", size_hint=(1, 1), spacing=dp(2))
+        name_col.add_widget(_lbl(f"[b]{analysis.hex_code}[/b]  「{analysis.name}」", size=dp(22), font_size=dp(15)))
+        name_col.add_widget(_lbl(
             f"{analysis.temperature} | {analysis.brightness} | {analysis.saturation_level}",
-            size=dp(18), font_size=dp(11), color=THEME["label_2"],
+            size=dp(16), font_size=dp(11), color=THEME["label_2"],
         ))
+        row.add_widget(name_col)
+        c.add_widget(row)
         c.add_widget(_lbl(f"感受：{analysis.mood}", size=dp(18), font_size=dp(11), color=THEME["label_2"]))
         L, a, b = color.lab
         C = math.hypot(a, b)
         h = math.degrees(math.atan2(b, a)) % 360.0
-        c.add_widget(_lbl(
-            f"Lab ({L:.1f}, {a:+.1f}, {b:+.1f})   LCh C*={C:.1f} h°={h:.1f}",
-            size=dp(18), font_size=dp(11), color=THEME["label_2"],
-        ))
+        # Lab 数据单独一行带背景
+        lab_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(28), spacing=dp(4), padding=(dp(4), dp(2), dp(4), dp(2)))
+        _bg(lab_row, (0.95, 0.95, 0.97, 1), radius=dp(6))
+        for label, val in [
+            ("L*", f"{L:.1f}"), ("a*", f"{a:+.1f}"), ("b*", f"{b:+.1f}"),
+            ("C*", f"{C:.1f}"), ("h°", f"{h:.1f}"),
+        ]:
+            chunk = BoxLayout(orientation="vertical", size_hint=(1, 1), spacing=dp(1))
+            chunk.add_widget(Label(text=label, font_size=dp(8), color=THEME["label_2"],
+                                   size_hint_y=None, height=dp(12), halign="center", valign="middle"))
+            chunk.add_widget(Label(text=val, font_size=dp(11), color=THEME["label"], bold=True,
+                                   size_hint_y=None, height=dp(16), halign="center", valign="middle"))
+            lab_row.add_widget(chunk)
+        c.add_widget(lab_row)
 
         # 商用色卡匹配
         if analysis.paint_matches:
             pc = self._card("商用色卡匹配")
             for m in analysis.paint_matches[:4]:
-                row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(26), spacing=dp(8))
-                s = SwatchWidget(size_hint=(None, 1), width=dp(22))
+                row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(28), spacing=dp(8))
+                s = SwatchWidget(size_hint=(None, 1), width=dp(24))
                 s.set_color(m.color if hasattr(m, "color") else None)
                 row.add_widget(s)
-                row.add_widget(_lbl(f"{m.display}   ΔE={m.delta_e:.1f}", font_size=dp(12)))
+                row.add_widget(_lbl(f"{m.display}   ", font_size=dp(12), bold=True, width=dp(80)))
+                row.add_widget(_lbl(f"ΔE={m.delta_e:.1f}", font_size=dp(12), color=THEME["danger"] if m.delta_e > 5 else THEME["success"]))
                 pc.add_widget(row)
 
         # 调色配方（比例条可视化）
@@ -553,26 +636,34 @@ class InfoPanel(ScrollView):
             pname_color[p.name] = p.color
         if recipes:
             rec = recipes[0]
-            rc.add_widget(_lbl(f"方案 ΔE={rec.delta_e:.1f}", size=dp(18), font_size=dp(11), color=THEME["label_2"]))
+            rc.add_widget(_lbl(f"模拟配方 ΔE={rec.delta_e:.1f}", size=dp(18), font_size=dp(11), color=THEME["label_2"]))
             for name, _hex, ratio in rec.components:
-                row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(26), spacing=dp(6))
-                s = SwatchWidget(size_hint=(None, 1), width=dp(22))
+                row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(30), spacing=dp(8))
+                s = SwatchWidget(size_hint=(None, 1), width=dp(24))
                 s.set_color(pname_color.get(name))
                 row.add_widget(s)
-                row.add_widget(_lbl(name, size=dp(26), width=dp(56), font_size=dp(12), bold=True))
+                row.add_widget(_lbl(name, size=dp(30), width=dp(60), font_size=dp(12), bold=True))
                 bar = RatioBar(size_hint=(1, 1))
                 bar.set_ratio(ratio, pname_color.get(name))
                 row.add_widget(bar)
-                row.add_widget(_lbl(f"{ratio:.0%}", size=dp(26), width=dp(40), font_size=dp(12), bold=True, halign="center"))
+                pct = Label(text=f"{ratio:.0%}", size_hint=(None, 1), width=dp(40),
+                            font_size=dp(12), bold=True, color=THEME["primary"], valign="middle")
+                row.add_widget(pct)
                 rc.add_widget(row)
         else:
             rc.add_widget(_lbl("暂无配方", size=dp(20), font_size=dp(12), color=THEME["label_2"]))
 
-        # 和谐配色
+        # 和谐配色（色块式展示）
         hc = self._card("和谐配色")
         for scheme, colors in self.advisor.suggest_harmony(color).items():
-            txts = "  ".join(x.hex for x in colors)
-            hc.add_widget(_lbl(f"{scheme}: {txts}", size=dp(18), font_size=dp(11), color=THEME["label_2"]))
+            row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(28), spacing=dp(6))
+            row.add_widget(_lbl(f"{scheme}:", size=dp(28), width=dp(50), font_size=dp(11), bold=True, color=THEME["label"]))
+            for c in colors:
+                cs = SwatchWidget(size_hint=(None, 1), width=dp(20))
+                cs.set_color(c)
+                row.add_widget(cs)
+                row.add_widget(_lbl(c.hex, size=dp(28), width=dp(44), font_size=dp(9), color=THEME["label_2"]))
+            hc.add_widget(row)
 
         self._scroll_top()
 
@@ -589,35 +680,43 @@ class InfoPanel(ScrollView):
 # ──────────────────────────────────────────────
 
 class DragMarker(Widget):
-    """可拖动取样点：彩色方块 + 文字标签（不用 Line/Ellipse）。"""
+    """可拖动取样点：彩色圆角方块 + 白色准星 + 文字标签。"""
 
     def __init__(self, title, rgba, **kwargs):
         super().__init__(**kwargs)
         self.title = title
         self.rgba = rgba
         self.size_hint = (None, None)
-        self.size = (dp(64), dp(64))
+        self.size = (dp(72), dp(72))
         self.on_drag = None
         self.bind(pos=self._redraw, size=self._redraw)
         self._redraw()
 
     def _redraw(self, *args):
         self.canvas.clear()
+        cx, cy = self.x + self.width / 2, self.y + self.height / 2
+        s = 36
         with self.canvas:
+            # 外圈阴影
+            GColor(0, 0, 0, 0.2)
+            RoundedRectangle(pos=(cx - s/2 + dp(2), cy - s/2 - dp(2)), size=(s, s), radius=[dp(8)])
+            # 主色块
             GColor(*self.rgba)
-            RoundedRectangle(pos=(self.x + dp(14), self.y + dp(4), ), size=(dp(36), dp(36)), radius=[dp(6)])
+            RoundedRectangle(pos=(cx - s/2, cy - s/2), size=(s, s), radius=[dp(8)])
+            # 白色准星
             GColor(1, 1, 1, 0.9)
-            RoundedRectangle(pos=(self.x + dp(29), self.y + dp(19)), size=(dp(6), dp(6)), radius=[dp(2)])
-        # 标签用 canvas 外不行，这里直接画文字到 canvas 也不安全，改用子 Label
+            RoundedRectangle(pos=(cx - dp(2), cy - dp(6)), size=(dp(4), dp(12)), radius=[dp(2)])
+            RoundedRectangle(pos=(cx - dp(6), cy - dp(2)), size=(dp(12), dp(4)), radius=[dp(2)])
+
         if not getattr(self, "_lab", None):
             self._lab = Label(
-                text=self.title, font_size=dp(11), color=(1, 1, 1, 0.95),
-                size_hint=(None, None), size=(dp(64), dp(20)),
-                outline_width=2, outline_color=(0, 0, 0, 0.8),
+                text=self.title, font_size=dp(10), color=(1, 1, 1, 0.95),
+                size_hint=(None, None), size=(dp(72), dp(16)),
+                bold=True,
             )
             self.add_widget(self._lab)
         self._lab.center_x = self.center_x
-        self._lab.y = self.y + dp(40)
+        self._lab.y = self.y + s + dp(6)
 
     def on_touch_down(self, touch):
         if not self.collide_point(*touch.pos):
@@ -663,9 +762,15 @@ class AiMixScreen(BoxLayout):
 
     def _build_ui(self):
         _bg(self, DARK["bg"])
-        # 顶栏
-        bar = BoxLayout(size_hint=(1, None), height=dp(48), spacing=dp(6), padding=(dp(6), 0, dp(6), 0))
+        # 顶栏（深色）
+        bar = BoxLayout(size_hint=(1, None), height=dp(48), spacing=dp(6), padding=(dp(8), 0, dp(8), 0))
         _bg(bar, DARK["bar"])
+        # 底部细线
+        with bar.canvas.after:
+            GColor(0.22, 0.22, 0.25, 1)
+            Rectangle(pos=(bar.x, bar.y), size=(bar.width, 0.5))
+        bar.bind(pos=lambda i, v: _update_mix_sep(i, v), size=lambda i, v: _update_mix_sep(i, v))
+
         self.btn_back = Button(
             text="‹ 返回", size_hint=(None, 1), width=dp(62),
             font_size=dp(14), color=DARK["text"], background_color=(0, 0, 0, 0), background_normal="",
@@ -676,6 +781,7 @@ class AiMixScreen(BoxLayout):
         self.btn_cal = Button(
             text="白卡校色", size_hint=(None, 1), width=dp(82),
             font_size=dp(12), color=(0.04, 0.07, 0.12, 1), background_color=DARK["accent"], background_normal="",
+            radius=[dp(8)],
         )
         self.btn_cal.bind(on_release=lambda b: self._do_calibrate())
         bar.add_widget(self.btn_cal)
@@ -685,55 +791,73 @@ class AiMixScreen(BoxLayout):
 
         # 主体：竖屏上下 / 横屏左右
         landscape = Window.width > Window.height
-        body = BoxLayout(orientation="horizontal" if landscape else "vertical", spacing=dp(6), padding=dp(6))
+        body = BoxLayout(orientation="horizontal" if landscape else "vertical", spacing=dp(4), padding=dp(4))
         self.add_widget(body)
 
         self.cam_area = FloatLayout()
         self.cam_area.size_hint = (0.62, 1) if landscape else (1, 0.5)
-        _bg(self.cam_area, (0.16, 0.17, 0.21, 1))
+        _bg(self.cam_area, DARK["card"])
         body.add_widget(self.cam_area)
 
         scroll = ScrollView(size_hint=(0.38, 1) if landscape else (1, 0.5))
         scroll.bar_width = dp(2)
+        scroll.bar_color = (0.35, 0.35, 0.38, 1)
         body.add_widget(scroll)
-        self.info_box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(8), padding=dp(4))
+        self.info_box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(8), padding=(dp(4), dp(4), dp(4), dp(8)))
         self.info_box.bind(minimum_height=self.info_box.setter("height"))
         scroll.add_widget(self.info_box)
 
-        # 色差卡片
-        pc = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6), padding=dp(10))
+        # 色差卡片（深色卡片 + 金色 ΔE 大字）
+        pc = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(8), padding=dp(12))
         pc.bind(minimum_height=pc.setter("height"))
         _bg(pc, DARK["card"], radius=dp(10))
+        # 顶部细边框
+        with pc.canvas.after:
+            GColor(0.25, 0.25, 0.28, 1)
+            RoundedRectangle(pos=(pc.x + dp(1), pc.y + dp(1)), size=(pc.width - dp(2), pc.height - dp(2)), radius=[dp(10)])
         self.delta_lbl = Label(
-            text="ΔE = --", size_hint_y=None, height=dp(40),
-            font_size=dp(24), color=DARK["gold"], bold=True, halign="center", valign="middle",
+            text="ΔE = --", size_hint_y=None, height=dp(48),
+            font_size=dp(28), color=DARK["gold"], bold=True, halign="center", valign="middle",
         )
         self.delta_lbl.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
         pc.add_widget(self.delta_lbl)
-        pv_t = Label(text="实时预览（调整区校正后）", size_hint_y=None, height=dp(16), font_size=dp(11), color=DARK["sub"], halign="left")
+        pv_t = Label(
+            text="实时预览（调整区校正后）", size_hint_y=None, height=dp(18), font_size=dp(11), color=DARK["sub"],
+            halign="left", valign="middle",
+        )
         pv_t.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
         pc.add_widget(pv_t)
-        self.preview_block = SwatchWidget(size_hint=(1, None), height=dp(56))
+        self.preview_block = SwatchWidget(size_hint=(1, None), height=dp(60))
         pc.add_widget(self.preview_block)
-        self.preview_hex = Label(text="--", size_hint_y=None, height=dp(16), font_size=dp(11), color=DARK["text"], halign="left")
+        self.preview_hex = Label(
+            text="--", size_hint_y=None, height=dp(18), font_size=dp(11), color=DARK["text"],
+            halign="left", valign="middle",
+        )
         self.preview_hex.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
         pc.add_widget(self.preview_hex)
         self.info_box.add_widget(pc)
 
-        # 干/潮检测
-        det = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(34), spacing=dp(6))
-        self.btn_dry = Button(text="干物检测", size_hint=(1, 1), font_size=dp(12), background_normal="")
+        # 干/潮检测（深色卡片风格按钮）
+        det = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(38), spacing=dp(8))
+        self.btn_dry = Button(
+            text="干物检测", size_hint=(1, 1), font_size=dp(12), background_normal="",
+            radius=[dp(10)],
+        )
         self.btn_dry.bind(on_release=lambda b: self._set_wet(False))
-        self.btn_wet = Button(text="潮物检测", size_hint=(1, 1), font_size=dp(12), background_normal="")
+        self.btn_wet = Button(
+            text="潮物检测", size_hint=(1, 1), font_size=dp(12), background_normal="",
+            radius=[dp(10)],
+        )
         self.btn_wet.bind(on_release=lambda b: self._set_wet(True))
         det.add_widget(self.btn_dry)
         det.add_widget(self.btn_wet)
         self.info_box.add_widget(det)
         self._paint_detect_buttons()
 
-        # 取样大小
-        sz = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(36), spacing=dp(8))
-        sz.add_widget(Label(text="调节大小", size_hint=(None, 1), width=dp(62), font_size=dp(12), color=DARK["text"]))
+        # 取样大小（深色卡片）
+        sz = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(40), spacing=dp(8), padding=dp(6))
+        _bg(sz, DARK["card"], radius=dp(10))
+        sz.add_widget(Label(text="取样大小", size_hint=(None, 1), width=dp(64), font_size=dp(12), color=DARK["text"]))
         slider = Slider(min=4, max=30, value=self._radius, size_hint=(1, 1))
         slider.bind(value=self._on_size_change)
         sz.add_widget(slider)
@@ -933,13 +1057,20 @@ class ColorAssistantApp(App):
         self.main_box = BoxLayout(orientation="vertical", spacing=0)
         self.root.add_widget(self.main_box)
 
-        # 顶栏
-        title_bar = BoxLayout(size_hint=(1, None), height=dp(48), spacing=dp(8), padding=(dp(6), 0, dp(6), 0))
-        _bg(title_bar, THEME["card"])
+        # 顶栏（iOS 风格）
+        title_bar = BoxLayout(size_hint=(1, None), height=dp(50), spacing=dp(6), padding=(dp(12), 0, dp(12), 0))
+        _bg(title_bar, THEME["card"], shadow=True)
+        # 底部细分割线
+        with title_bar.canvas.after:
+            GColor(0.78, 0.78, 0.80, 1)
+            Rectangle(pos=(title_bar.x, title_bar.y), size=(title_bar.width, 0.5))
+        title_bar.bind(pos=lambda i, v: _update_sep(i, v), size=lambda i, v: _update_sep(i, v))
+
         title_bar.add_widget(Label(text="AI 调色助手", size_hint=(1, 1), font_size=dp(17), color=THEME["label"], bold=True))
         btn_report = Button(
-            text="完整报告", size_hint=(None, 1), width=dp(84),
+            text="完整报告", size_hint=(None, 0.7), width=dp(80),
             font_size=dp(13), background_color=THEME["primary"], background_normal="", color=(1, 1, 1, 1),
+            radius=[dp(8)],
         )
         btn_report.bind(on_release=lambda b: self._on_report())
         title_bar.add_widget(btn_report)
@@ -947,7 +1078,7 @@ class ColorAssistantApp(App):
 
         # 主体
         landscape = Window.width > Window.height and Window.width > 600
-        body = BoxLayout(orientation="horizontal" if landscape else "vertical", spacing=dp(6), padding=dp(6))
+        body = BoxLayout(orientation="horizontal" if landscape else "vertical", spacing=0, padding=0)
         self.camera_view = CameraView(
             on_color_picked=self._on_color_picked,
             size_hint=(0.55, 1) if landscape else (1, 0.55),
@@ -959,15 +1090,21 @@ class ColorAssistantApp(App):
         self.main_box.add_widget(body)
         Clock.schedule_once(lambda dt: self.camera_view._center_crosshair(), 0.5)
 
-        # 工具栏
-        toolbar = BoxLayout(size_hint=(1, None), height=dp(56), spacing=dp(8), padding=(dp(10), dp(8), dp(10), dp(8)))
-        _bg(toolbar, THEME["card"])
+        # 工具栏（圆角卡片风格）
+        toolbar = BoxLayout(size_hint=(1, None), height=dp(64), spacing=dp(8), padding=(dp(12), dp(8), dp(12), dp(10)))
+        _bg(toolbar, THEME["card"], shadow=True)
+        # 顶部细分割线
+        with toolbar.canvas.after:
+            GColor(0.78, 0.78, 0.80, 1)
+            Rectangle(pos=(toolbar.x, toolbar.y + toolbar.height), size=(toolbar.width, 0.5))
+        toolbar.bind(pos=lambda i, v: _update_toolbar_sep(i, v), size=lambda i, v: _update_toolbar_sep(i, v))
 
         def _btn(text, color, cb, width=None):
             b = Button(
                 text=text, size_hint=(1, 1) if width is None else (None, 1),
-                width=width or 0, font_size=dp(13),
+                width=width or 0, font_size=dp(12),
                 background_color=color, background_normal="", color=(1, 1, 1, 1),
+                radius=[dp(10)],
             )
             b.bind(on_release=cb)
             return b
