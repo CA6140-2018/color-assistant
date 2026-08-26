@@ -243,6 +243,21 @@ class CameraView(FloatLayout):
                 self._cam_sched = True
                 Clock.schedule_once(self._init_android_camera, 0)
             self._camera_started = True
+            # 首帧超时兜底：10 秒后如果还没收到纹理，尝试重新初始化
+            Clock.schedule_once(self._frame_timeout, 10.0)
+
+    def _frame_timeout(self, dt):
+        if self._placeholder.parent is None:
+            return  # 已收到首帧，正常
+        crash_log.write_crash("[camera] frame timeout: no texture after 10s, restarting\n")
+        if self.kivy_camera is not None:
+            self.kivy_camera.play = False
+            self.remove_widget(self.kivy_camera)
+            self.kivy_camera = None
+        self._camera_started = False
+        self._cam_sched = False
+        Clock.schedule_once(self._init_android_camera, 0)
+        self._camera_started = True
 
     def _init_android_camera(self, dt):
         """主线程创建隐藏采集器（三重隐藏，防漏画面）。"""
@@ -878,8 +893,18 @@ def request_android_camera_permission(callback=None):
             callback(True)
         return
     try:
-        from android.permissions import request_permissions, Permission
+        from android.permissions import (
+            check_permission, request_permissions, Permission,
+        )
         from android.runnable import run_on_ui_thread
+
+        # MIUI 上已授予权限后再调用 request_permissions 可能不触发回调。
+        # 先检查，已授权则直接跳过。
+        if check_permission(Permission.CAMERA):
+            crash_log.write_crash("[perm] camera already granted, skip request\n")
+            if callback:
+                callback(True)
+            return
 
         def _cb(results):
             granted = any(results) if isinstance(results, (list, tuple)) else bool(results)
@@ -960,9 +985,21 @@ class ColorAssistantApp(App):
         return self.root
 
     def _init_camera(self, dt):
+        crash_log.write_crash("[init] _init_camera called\n")
         request_android_camera_permission(self._on_permission_result)
+        # 安全兜底：如果 5 秒后摄像头还没启动，尝试强制启动
+        Clock.schedule_once(self._camera_safety_timeout, 5.0)
+
+    def _camera_safety_timeout(self, dt):
+        cv = self.camera_view
+        if cv._camera_started:
+            return
+        crash_log.write_crash("[init] safety timeout: camera not started, force-starting\n")
+        crash_log.write_crash("[init]  kivy_camera=%s _cam_sched=%s\n" % (cv.kivy_camera, getattr(cv, "_cam_sched", False)))
+        cv.start_camera()
 
     def _on_permission_result(self, granted):
+        crash_log.write_crash("[init] _on_permission_result granted=%s\n" % (granted,))
         if granted:
             self.camera_view.start_camera()
         else:
