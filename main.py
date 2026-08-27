@@ -278,6 +278,12 @@ class CameraView(FloatLayout):
         self._camera_started = False
         self._rotation = 90 if IS_ANDROID else 0
 
+        # 暗色背景占满（让摄像头区域不是白色）
+        with self.canvas:
+            GColor(0.039, 0.086, 0.157, 1)  # DARK["bg"]
+            Rectangle(pos=self.pos, size=self.size)
+        self.bind(pos=self._update_bg, size=self._update_bg)
+
         self.tex_view = TexView(size_hint=(1, 1))
         self.tex_view.set_rotation(self._rotation)
         self.add_widget(self.tex_view)
@@ -288,7 +294,7 @@ class CameraView(FloatLayout):
             text="📷", font_size=dp(40), size_hint=(1, None), height=dp(50),
         ))
         self._placeholder.add_widget(Label(
-            text="摄像头启动中…", font_size=dp(13), color=(0.55, 0.55, 0.57, 1),
+            text="请点击画面取色", font_size=dp(13), color=(0.7, 0.7, 0.7, 1),
             size_hint=(1, None), height=dp(24),
         ))
         self.add_widget(self._placeholder)
@@ -318,6 +324,12 @@ class CameraView(FloatLayout):
     def _center_crosshair(self, *args):
         self.crosshair.center = self.center
         self.crosshair_outline.center = self.center
+
+    def _update_bg(self, *args):
+        self.canvas.clear()
+        with self.canvas:
+            GColor(0.039, 0.086, 0.157, 1)
+            Rectangle(pos=self.pos, size=self.size)
 
     def rotate_cw(self):
         if HAS_CV2 and not IS_ANDROID:
@@ -814,7 +826,7 @@ class AiMixScreen(BoxLayout):
         )
         self.btn_back.bind(on_release=lambda b: self.request_close())
         bar.add_widget(self.btn_back)
-        bar.add_widget(Label(text="油小漆调色助理", size_hint=(1, 1), font_size=dp(16), color=DARK["text"], bold=True))
+        bar.add_widget(Label(text="AI辅助调色", size_hint=(1, 1), font_size=dp(16), color=DARK["text"], bold=True))
         btn_video = Label(text="▣", size_hint=(None, 1), width=dp(32), font_size=dp(16), color=DARK["sub"])
         bar.add_widget(btn_video)
         btn_set = Label(text="⚙", size_hint=(None, 1), width=dp(32), font_size=dp(16), color=DARK["sub"])
@@ -823,7 +835,7 @@ class AiMixScreen(BoxLayout):
 
         # ── 摄像头区（点击取中心色） ──
         self.cam_area = FloatLayout()
-        self.cam_area.size_hint = (1, 0.50)
+        self.cam_area.size_hint = (1, 0.60)
         _bg(self.cam_area, DARK["bg"])
         # 点击取色提示
         tip = Label(
@@ -1124,9 +1136,9 @@ class ColorAssistantApp(App):
         body = BoxLayout(orientation="horizontal" if landscape else "vertical", spacing=0, padding=0)
         self.camera_view = CameraView(
             on_color_picked=self._on_color_picked,
-            size_hint=(0.48, 1) if landscape else (1, 0.48),
+            size_hint=(0.65, 1) if landscape else (1, 0.65),
         )
-        self.info_panel = InfoPanel(size_hint=(0.52, 1) if landscape else (1, 0.52))
+        self.info_panel = InfoPanel(size_hint=(0.35, 1) if landscape else (1, 0.35))
         body.add_widget(self.camera_view)
         body.add_widget(self.info_panel)
         self._body = body
@@ -1150,11 +1162,7 @@ class ColorAssistantApp(App):
             b.bind(on_release=cb)
             return b
 
-        toolbar.add_widget(_btn("中心取色", THEME["primary"], lambda b: self._on_center_pick()))
-        toolbar.add_widget(_btn("提取主色", THEME["warning"], lambda b: self._on_dominant_pick()))
         toolbar.add_widget(_btn("AI辅助调色", (0.42, 0.42, 0.9, 1), lambda b: self._on_open_mix()))
-        toolbar.add_widget(_btn("旋转", (0.55, 0.55, 0.6, 1), lambda b: self.camera_view.rotate_cw(), width=dp(60)))
-        toolbar.add_widget(_btn("日志", (0.45, 0.45, 0.5, 1), lambda b: self.info_panel.show_crash_path(_crash_path), width=dp(48)))
         self.main_box.add_widget(toolbar)
 
         self._current_color = None
@@ -1242,7 +1250,7 @@ class ColorAssistantApp(App):
             return
         self.mix_screen.shutdown()
         landscape = Window.width > Window.height and Window.width > 600
-        self.camera_view.size_hint = (0.55, 1) if landscape else (1, 0.55)
+        self.camera_view.size_hint = (0.65, 1) if landscape else (1, 0.65)
         self.mix_screen.cam_area.remove_widget(self.camera_view)
         self._body.add_widget(self.camera_view, index=0)
         self.root.remove_widget(self.mix_screen)
