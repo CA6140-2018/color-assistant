@@ -1,0 +1,18 @@
+<svg width="400" height="180" viewBox="0 0 400 180" xmlns="http://www.w3.org/2000/svg">
+  <!-- Logo: 成都动车段 无痕修复工作室 -->
+  <!-- 上部流线型图形 + CHENGDU -->
+  <g transform="translate(20, 10)">
+    <!-- 背景流线型 -->
+    <path d="M 0 35 C 40 10, 120 5, 180 15 C 240 25, 300 45, 320 60 
+             L 320 0 L 0 0 Z" 
+          fill="#0056B3" opacity="0.95"/>
+    <!-- CHENGDU 文字（白色，倾斜嵌入）-->
+    <text x="20" y="30" font-family="Arial, sans-serif" font-size="22" font-weight="bold" 
+          fill="white" transform="skewX(-15)">CHENGDU</text>
+  </g>
+  <!-- 下部中文 -->
+  <g transform="translate(20, 80)">
+    <text x="0" y="40" font-family="Microsoft YaHei, sans-serif" font-size="36" font-weight="bold" 
+          fill="#0056B3" transform="skewX(-15)">无痕修复工作室</text>
+  </g>
+</svg>

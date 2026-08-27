@@ -582,6 +582,11 @@ class InfoPanel(ScrollView):
         self.do_scroll_x = False
         self.bar_width = dp(2)
         self.bar_color = (0.78, 0.78, 0.80, 1)
+        # 白色背景
+        with self.canvas.before:
+            GColor(1, 1, 1, 1)
+            Rectangle(pos=self.pos, size=self.size)
+        self.bind(pos=self._update_bg, size=self._update_bg)
         self.container = BoxLayout(
             orientation="vertical", size_hint_y=None, spacing=dp(12), padding=(dp(16), dp(12), dp(16), dp(12)),
         )
@@ -611,7 +616,16 @@ class InfoPanel(ScrollView):
             text="👆", font_size=dp(40), size_hint_y=None, height=dp(50), halign="center", valign="middle",
         ))
         c.add_widget(_lbl("等待取色...", size=dp(24), font_size=dp(15), color=THEME["label_2"], halign="center"))
-        c.add_widget(_lbl("点击摄像头画面取色，\n或点击「中心取色」按钮", size=dp(40), font_size=dp(12), color=THEME["label_2"], halign="center"))
+        c.add_widget(_lbl("点击摄像头画面取色", size=dp(40), font_size=dp(12), color=THEME["label_2"], halign="center"))
+
+    def _update_bg(self, *args):
+        self.canvas.before.clear()
+        with self.canvas.before:
+            GColor(1, 1, 1, 1)
+            Rectangle(pos=self.pos, size=self.size)
+
+    def _clear(self):
+        self.container.clear_widgets()
 
     def _show_permission_denied(self):
         self._clear()
@@ -762,7 +776,7 @@ class InfoPanel(ScrollView):
                 bar = RatioBar(size_hint=(1, 1))
                 bar.set_ratio(ratio, pname_color.get(name))
                 row.add_widget(bar)
-                pct = Label(text=f"{ratio:.0%}", size_hint=(None, 1), width=dp(36),
+                pct = Label(text=f"{ratio:.0f}%", size_hint=(None, 1), width=dp(36),
                             font_size=dp(12), bold=True, color=THEME["primary"], valign="middle")
                 row.add_widget(pct)
                 rc.add_widget(row)
@@ -827,10 +841,6 @@ class AiMixScreen(BoxLayout):
         self.btn_back.bind(on_release=lambda b: self.request_close())
         bar.add_widget(self.btn_back)
         bar.add_widget(Label(text="AI辅助调色", size_hint=(1, 1), font_size=dp(16), color=DARK["text"], bold=True))
-        btn_video = Label(text="▣", size_hint=(None, 1), width=dp(32), font_size=dp(16), color=DARK["sub"])
-        bar.add_widget(btn_video)
-        btn_set = Label(text="⚙", size_hint=(None, 1), width=dp(32), font_size=dp(16), color=DARK["sub"])
-        bar.add_widget(btn_set)
         self.add_widget(bar)
 
         # ── 摄像头区（点击取中心色） ──
@@ -1087,7 +1097,28 @@ class ColorAssistantApp(App):
         self.main_box = BoxLayout(orientation="vertical", spacing=0)
         self.root.add_widget(self.main_box)
 
-        # ── 顶栏（参考图2 iOS风格）──
+        # ── 启动画面 ──
+        from kivy.uix.image import Image as KivyImage
+        splash = FloatLayout()
+        _bg(splash, DARK["bg"])
+        logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo.png")
+        if os.path.exists(logo_path):
+            logo_img = KivyImage(
+                source=logo_path, size_hint=(None, None),
+                size=(dp(260), dp(180)), pos_hint={"center_x": 0.5, "center_y": 0.55},
+                keep_ratio=True, allow_stretch=True,
+            )
+            splash.add_widget(logo_img)
+        else:
+            splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
+                                   color=(1, 1, 1, 1), halign="center"))
+        splash.add_widget(_lbl("v1.2", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+                               pos_hint={"center_x": 0.5, "y": 0.08}))
+        self.root.add_widget(splash)
+        # 2秒后淡出启动画面
+        Clock.schedule_once(lambda dt: self._fade_out(splash), 2.0)
+
+        # ── 顶栏 ──
         title_bar = BoxLayout(size_hint=(1, None), height=dp(50), spacing=dp(6), padding=(dp(16), 0, dp(16), 0))
         _bg(title_bar, THEME["card"])
         with title_bar.canvas.after:
@@ -1095,57 +1126,24 @@ class ColorAssistantApp(App):
             Rectangle(pos=(title_bar.x, title_bar.y), size=(title_bar.width, 0.5))
         title_bar.bind(pos=lambda i, v: _update_sep(i, v), size=lambda i, v: _update_sep(i, v))
 
-        title_bar.add_widget(Label(text="调色查询", size_hint=(1, 1), font_size=dp(17), color=THEME["label"], bold=True))
-        # 右侧图标按钮（参考图2的•••和◎）
-        btn_more = Button(
-            text="•••", size_hint=(None, 1), width=dp(36),
-            font_size=dp(14), color=THEME["label_2"], background_color=(0, 0, 0, 0), background_normal="",
-        )
-        btn_more.bind(on_release=lambda b: self._on_report())
-        title_bar.add_widget(btn_more)
-        btn_settings = Button(
-            text="◎", size_hint=(None, 1), width=dp(36),
-            font_size=dp(14), color=THEME["label_2"], background_color=(0, 0, 0, 0), background_normal="",
-        )
-        btn_settings.bind(on_release=lambda b: None)
-        title_bar.add_widget(btn_settings)
+        title_bar.add_widget(Label(text="颜色配比分析", size_hint=(1, 1), font_size=dp(17), color=THEME["label"], bold=True))
         self.main_box.add_widget(title_bar)
 
-        # ── 分段控制（参考图2：下划线风格）──
-        seg = BoxLayout(size_hint=(1, None), height=dp(36), spacing=dp(0), padding=(dp(16), 0, dp(16), 0))
-        _bg(seg, THEME["card"])
-        self._seg_btn1 = Button(
-            text="拍照识别", size_hint=(1, 1), font_size=dp(14),
-            color=THEME["primary"], background_color=(0, 0, 0, 0), background_normal="", bold=True,
-        )
-        self._seg_btn2 = Button(
-            text="手动输入", size_hint=(1, 1), font_size=dp(14),
-            color=THEME["label_2"], background_color=(0, 0, 0, 0), background_normal="",
-        )
-        self._seg_btn1.bind(on_release=lambda b: self._seg_select(0))
-        self._seg_btn2.bind(on_release=lambda b: self._seg_select(1))
-        # 下划线指示器
-        seg.bind(pos=self._update_seg_underline, size=self._update_seg_underline)
-        seg.add_widget(self._seg_btn1)
-        seg.add_widget(self._seg_btn2)
-        self._seg = seg
-        self.main_box.add_widget(seg)
-
-        # ── 主体（参考图2：图片区 + 数据区）──
+        # ── 主体（参考图：图片区 + 数据区）──
         landscape = Window.width > Window.height and Window.width > 600
         body = BoxLayout(orientation="horizontal" if landscape else "vertical", spacing=0, padding=0)
         self.camera_view = CameraView(
             on_color_picked=self._on_color_picked,
-            size_hint=(0.65, 1) if landscape else (1, 0.65),
+            size_hint=(0.60, 1) if landscape else (1, 0.60),
         )
-        self.info_panel = InfoPanel(size_hint=(0.35, 1) if landscape else (1, 0.35))
+        self.info_panel = InfoPanel(size_hint=(0.40, 1) if landscape else (1, 0.40))
         body.add_widget(self.camera_view)
         body.add_widget(self.info_panel)
         self._body = body
         self.main_box.add_widget(body)
         Clock.schedule_once(lambda dt: self.camera_view._center_crosshair(), 0.5)
 
-        # ── 工具栏（精简）──
+        # ── 工具栏 ──
         toolbar = BoxLayout(size_hint=(1, None), height=dp(56), spacing=dp(8), padding=(dp(16), dp(8), dp(16), dp(10)))
         _bg(toolbar, THEME["card"])
         with toolbar.canvas.after:
@@ -1167,32 +1165,13 @@ class ColorAssistantApp(App):
 
         self._current_color = None
         self.mix_screen = None
-        self._seg_active = 0
         Clock.schedule_once(self._init_camera, 1.0)
         return self.root
 
-    def _update_seg_underline(self, inst, *args):
-        inst.canvas.after.clear()
-        with inst.canvas.after:
-            GColor(0.78, 0.78, 0.80, 0.5)
-            Rectangle(pos=(inst.x, inst.y), size=(inst.width, 0.5))
-            # 选中态下划线
-            if self._seg_active == 0:
-                bw = inst.width / 2
-                bx = inst.x
-            else:
-                bw = inst.width / 2
-                bx = inst.x + bw
-            GColor(*THEME["primary"])
-            RoundedRectangle(pos=(bx + dp(8), inst.y), size=(bw - dp(16), dp(2)), radius=[dp(1)])
-
-    def _seg_select(self, idx):
-        self._seg_active = idx
-        self._seg_btn1.color = THEME["primary"] if idx == 0 else THEME["label_2"]
-        self._seg_btn1.bold = (idx == 0)
-        self._seg_btn2.color = THEME["primary"] if idx == 1 else THEME["label_2"]
-        self._seg_btn2.bold = (idx == 1)
-        self._update_seg_underline(self._seg)
+    def _fade_out(self, splash):
+        def _do(dt):
+            self.root.remove_widget(splash)
+        Clock.schedule_once(_do, 0.5)
 
     def _init_camera(self, dt):
         crash_log.write_crash("[init] _init_camera called\n")
@@ -1250,7 +1229,7 @@ class ColorAssistantApp(App):
             return
         self.mix_screen.shutdown()
         landscape = Window.width > Window.height and Window.width > 600
-        self.camera_view.size_hint = (0.65, 1) if landscape else (1, 0.65)
+        self.camera_view.size_hint = (0.60, 1) if landscape else (1, 0.60)
         self.mix_screen.cam_area.remove_widget(self.camera_view)
         self._body.add_widget(self.camera_view, index=0)
         self.root.remove_widget(self.mix_screen)
