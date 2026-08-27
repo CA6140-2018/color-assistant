@@ -139,39 +139,8 @@ def saturation_level(color: Color) -> str:
 
 
 def color_mood(color: Color) -> str:
-    """色彩心理/情感联想。"""
-    h, s, l = color.hsl
-
-    if s < 10:
-        if l > 80:
-            return "纯净、简洁"
-        elif l > 40:
-            return "沉稳、平和"
-        elif l > 15:
-            return "低调、内敛"
-        else:
-            return "神秘、深沉"
-
-    temp = color_temperature(color)
-    if "暖" in temp:
-        if h <= 30 or h >= 330:
-            if s > 60:
-                return "热情、活力"
-            else:
-                return "温暖、舒适"
-        elif h <= 60:
-            return "欢快、阳光"
-        else:
-            return "活力、积极"
-    elif "冷" in temp:
-        if 180 <= h <= 220:
-            return "冷静、深邃"
-        elif 220 <= h <= 260:
-            return "理智、沉稳"
-        else:
-            return "清新、宁静"
-    else:
-        return "平衡、自然"
+    """根据色相/明度给出心理感受描述。"""
+    return ""
 
 
 class ColorAdvisor:
@@ -202,7 +171,6 @@ class ColorAdvisor:
         if paint_matches:
             best = paint_matches[0]
             desc_parts.append(f"最接近的商用色卡为「{best.display}」(ΔE {best.delta_e:.1f})")
-        desc_parts.append(f"色彩感受：{mood}")
 
         return ColorAnalysis(
             color=color,
@@ -331,7 +299,6 @@ class ColorAdvisor:
         lines.append(f"  色温: {analysis.temperature}")
         lines.append(f"  明度: {analysis.brightness}")
         lines.append(f"  饱和度: {analysis.saturation_level}")
-        lines.append(f"  色彩感受: {analysis.mood}")
         lines.append(f"  {analysis.description}")
         lines.append("")
 

@@ -20,12 +20,13 @@ _FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
 
 def _find_cjk_font():
     candidates = [
-        os.path.join(_FONT_DIR, "NotoSansSC-Regular.otf"),
-        os.path.join(_FONT_DIR, "NotoSansSC-Regular.ttf"),
-        # MIUI 系统字体（视觉接近苹方）
+        # MIUI 系统字体（视觉接近苹方）- 优先使用
         "/system/fonts/MiSans-Regular.ttf",
         "/system/fonts/MiSans.ttf",
         "/system/fonts/MiSans-Regular.otf",
+        # 本地打包字体（下载到项目fonts目录）
+        os.path.join(_FONT_DIR, "NotoSansSC-Regular.otf"),
+        os.path.join(_FONT_DIR, "NotoSansSC-Regular.ttf"),
         # Android 通用中文字体
         "/system/fonts/NotoSansSC-Regular.otf",
         "/system/fonts/NotoSansCJK-Regular.ttc",
@@ -666,7 +667,6 @@ class InfoPanel(ScrollView):
             f"{analysis.temperature} | {analysis.brightness} | {analysis.saturation_level}",
             size=dp(16), font_size=dp(11), color=THEME["label_2"],
         ))
-        info.add_widget(_lbl(f"感受：{analysis.mood}", size=dp(16), font_size=dp(11), color=THEME["label_2"]))
         preview.add_widget(info)
         self.container.add_widget(preview)
 
