@@ -873,12 +873,12 @@ class AiMixScreen(BoxLayout):
         btn_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(34), spacing=dp(6), padding=(dp(12), 0, dp(12), 0))
         self._btn_correction = Button(
             text="矫正色", size_hint=(1, 1), font_size=dp(12), background_normal="",
-            background_color=DARK["unselected"], color=DARK["text"], radius=[dp(8)],
+            background_color=DARK["unselected"], color=DARK["text"],
         )
         self._btn_correction.bind(on_release=lambda b: self._set_mode("correction"))
         self._btn_current = Button(
             text="当前色", size_hint=(1, 1), font_size=dp(12), background_normal="",
-            background_color=DARK["selected"], color=(0.1, 0.1, 0.1, 1), bold=True, radius=[dp(8)],
+            background_color=DARK["selected"], color=(0.1, 0.1, 0.1, 1), bold=True,
         )
         self._btn_current.bind(on_release=lambda b: self._set_mode("current"))
         btn_row.add_widget(self._btn_correction)
@@ -889,12 +889,12 @@ class AiMixScreen(BoxLayout):
         mid_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(32), spacing=dp(6), padding=(dp(12), 0, dp(12), 0))
         self._btn_dry = Button(
             text="干物检测", size_hint=(None, 1), width=dp(76), font_size=dp(11), background_normal="",
-            background_color=DARK["orange"], color=(1, 1, 1, 1), radius=[dp(8)],
+            background_color=DARK["orange"], color=(1, 1, 1, 1),
         )
         self._btn_dry.bind(on_release=lambda b: self._set_wet(False))
         self._btn_wet = Button(
             text="潮物检测", size_hint=(None, 1), width=dp(76), font_size=dp(11), background_normal="",
-            background_color=DARK["unselected"], color=DARK["text"], radius=[dp(8)],
+            background_color=DARK["unselected"], color=DARK["text"],
         )
         self._btn_wet.bind(on_release=lambda b: self._set_wet(True))
         mid_row.add_widget(self._btn_dry)
@@ -1146,7 +1146,6 @@ class ColorAssistantApp(App):
                 text=text, size_hint=(1, 1) if width is None else (None, 1),
                 width=width or 0, font_size=dp(12),
                 background_color=color, background_normal="", color=(1, 1, 1, 1),
-                radius=[dp(10)],
             )
             b.bind(on_release=cb)
             return b
