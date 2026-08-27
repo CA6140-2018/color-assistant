@@ -1113,7 +1113,8 @@ class ColorAssistantApp(App):
             splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                    color=(1, 1, 1, 1), halign="center"))
         splash.add_widget(_lbl("v1.2", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
-                               pos_hint={"center_x": 0.5, "y": 0.08}))
+                               width=dp(60)))
+        splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
         self.root.add_widget(splash)
         # 2秒后淡出启动画面
         Clock.schedule_once(lambda dt: self._fade_out(splash), 2.0)
