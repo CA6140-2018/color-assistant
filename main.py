@@ -1068,7 +1068,7 @@ def request_android_camera_permission(callback=None):
 
 class ColorAssistantApp(App):
     def build(self):
-        self.title = "AI 调色助手"
+        self.title = "AI 调色助手 v1.2"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()

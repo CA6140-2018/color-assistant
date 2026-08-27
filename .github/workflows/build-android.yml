@@ -111,9 +111,9 @@ jobs:
           echo "Unsigned APK: $UNSIGNED"
           ls -l "$UNSIGNED"
           # 对 unsigned APK 做 v2+v3 签名（apksigner 自动对齐，比 jarsigner 更稳）
-          # 版本号 = 1.1 + Git 短哈希，保证每个版本产物名不同、可溯源
+          # 版本号 = 1.2 + Git 短哈希，保证每个版本产物名不同、可溯源
           SHORT_SHA=$(echo "$GITHUB_SHA" | cut -c1-7)
-          VER="1.1-$SHORT_SHA"
+          VER="1.2-$SHORT_SHA"
           "$APKSIGNER" sign \
             --ks colorassistant-release.jks \
             --ks-key-alias colorassistant \
