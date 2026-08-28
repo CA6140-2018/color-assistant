@@ -1090,7 +1090,7 @@ def request_android_camera_permission(callback=None):
 
 class ColorAssistantApp(App):
     def build(self):
-        self.title = "AI 调色助手 v1.2"
+        self.title = "AI 调色助手 v1.2.1"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1112,7 +1112,7 @@ class ColorAssistantApp(App):
         else:
             splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                    color=(1, 1, 1, 1), halign="center"))
-        splash.add_widget(_lbl("v1.2", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+        splash.add_widget(_lbl("v1.2.1", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                width=dp(60)))
         splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
         self.root.add_widget(splash)
