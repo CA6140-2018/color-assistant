@@ -28,9 +28,7 @@ android-ndk/
 .DS_Store
 Thumbs.db
 
-# Fonts (downloaded during build, not committed)
-fonts/*.otf
-fonts/*.ttf
+# Fonts (NotoSansSC-Regular.otf 已提交入库，保证构建不依赖 CDN)
 
 # Local build artifacts / checks (not for GitHub)
 artifact_APK.tar.gz

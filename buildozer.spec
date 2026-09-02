@@ -6,7 +6,7 @@ package.name = colorassistant
 package.domain = org.colorassistant
 
 # 版本
-version = 1.2.2
+version = 1.2.3
 
 # 源代码目录
 source.dir = .

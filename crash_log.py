@@ -98,6 +98,9 @@ def _write(path, text):
     try:
         with open(path, "a", encoding="utf-8") as f:
             f.write(text)
+            # 立即刷盘：原生层崩溃(不经过Python异常钩子)时缓冲内容也能落盘
+            f.flush()
+            os.fsync(f.fileno())
         return True
     except Exception:
         return False
@@ -145,6 +148,18 @@ def install() -> str:
         write_crash("\n----- CRASH %s -----\n%s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), tb))
 
     sys.excepthook = _hook
+
+    # 线程内异常默认只打印到 stderr，不会进日志；也接进来
+    try:
+        import threading
+
+        def _thread_hook(args):
+            tb = "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_tb))
+            write_crash("\n----- THREAD CRASH (%s) -----\n%s\n" % (args.thread.name, tb))
+
+        threading.excepthook = _thread_hook
+    except Exception:
+        pass
 
     # faulthandler 捕获低层 Python 崩溃（如信号级异常）
     if hasattr(sys, "implementation") and not getattr(sys, "android_exported", False):

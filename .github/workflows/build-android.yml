@@ -39,24 +39,20 @@ jobs:
           pip install --upgrade pip
           pip install buildozer 'cython<3.0'
 
-      - name: Download Chinese font (backup)
+      - name: Verify Chinese font (committed to repo)
         run: |
-          mkdir -p fonts
-          # Try multiple sources; if all fail, app will use Android system font at runtime
-          curl -sL -o fonts/NotoSansSC-Regular.otf \
-            "https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Sans/OTF/SimplifiedChinese/NotoSansSC-Regular.otf" \
-            2>/dev/null || true
-          if [ -f fonts/NotoSansSC-Regular.otf ]; then
-            SIZE=$(stat -c%s fonts/NotoSansSC-Regular.otf 2>/dev/null || echo 0)
-            if [ "$SIZE" -gt 1000000 ]; then
-              echo "Font downloaded: $SIZE bytes"
-            else
-              echo "Font file too small ($SIZE bytes), removing (likely LFS pointer)"
-              rm -f fonts/NotoSansSC-Regular.otf
-            fi
-          else
-            echo "Font download failed, will use system font at runtime"
+          # 字体已提交进仓库（fonts/NotoSansSC-Regular.otf，约 8.3MB），
+          # 不再依赖 CDN 下载（旧 jsdelivr 地址 404，导致 APK 无字体、
+          # 运行时回退系统 TTC 字体疑似引发原生层闪退）
+          FONT=fonts/NotoSansSC-Regular.otf
+          if [ ! -f "$FONT" ]; then
+            echo "ERROR: $FONT missing from repo"; exit 1
           fi
+          SIZE=$(stat -c%s "$FONT")
+          if [ "$SIZE" -lt 1000000 ]; then
+            echo "ERROR: $FONT too small ($SIZE bytes), likely corrupted"; exit 1
+          fi
+          echo "Font OK: $SIZE bytes"
 
       - name: Cache Android SDK & NDK
         uses: actions/cache@v3
@@ -114,9 +110,9 @@ jobs:
           echo "Unsigned APK: $UNSIGNED"
           ls -l "$UNSIGNED"
           # 对 unsigned APK 做 v2+v3 签名（apksigner 自动对齐，比 jarsigner 更稳）
-          # 版本号 = 1.2.2 + Git 短哈希，保证每个版本产物名不同、可溯源
+          # 版本号 = 1.2.3 + Git 短哈希，保证每个版本产物名不同、可溯源
           SHORT_SHA=$(echo "$GITHUB_SHA" | cut -c1-7)
-          VER="1.2.2-$SHORT_SHA"
+          VER="1.2.3-$SHORT_SHA"
           "$APKSIGNER" sign \
             --ks colorassistant-release.jks \
             --ks-key-alias colorassistant \
@@ -154,7 +150,7 @@ jobs:
               --notes "AI 调色助手 ${SIGNED_APK}
 
           安装：直接下载下方 .apk 文件（无需登录、无需解压），手机上点击安装。
-          验证版本：启动画面和标题栏应显示 v1.2.2。"
+          验证版本：启动画面和标题栏应显示 v1.2.3。"
           fi
           echo "=== Release URL ==="
           echo "https://github.com/CA6140-2018/color-assistant/releases/tag/${TAG}"

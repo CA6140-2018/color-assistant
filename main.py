@@ -28,16 +28,36 @@ def _boot_paths():
 
 
 def _boot_marker(stage):
-    """启动阶段标记：即使闪退也能知道执行到了哪一步。"""
+    """启动阶段标记：即使闪退也能知道执行到了哪一步。
+
+    每次写入立即 flush+fsync 落盘——原生层崩溃会丢掉 Python 缓冲区里
+    未刷盘的内容，这就是之前 boot.txt/crash_log.txt 全是 0 字节的原因。
+    """
     import time as _t
     line = "stage=%s %s\n" % (stage, _t.strftime("%Y-%m-%d %H:%M:%S"))
     for p in _boot_paths():
         try:
             with open(p, "a", encoding="utf-8") as _f:
                 _f.write(line)
+                _f.flush()
+                os.fsync(_f.fileno())
             return
         except Exception:
             continue
+
+
+def _last_boot_completed() -> bool:
+    """上次启动是否完整跑到 build 结束（用于 safe-mode 判定）。"""
+    for p in _boot_paths():
+        try:
+            if not os.path.isfile(p):
+                continue
+            with open(p, "r", encoding="utf-8", errors="ignore") as _f:
+                text = _f.read()
+            return "9-build-returning" in text
+        except Exception:
+            continue
+    return False
 
 
 _boot_marker("1-python-started")
@@ -80,12 +100,14 @@ def _is_android():
         return False
 
 IS_ANDROID = _is_android()
+_boot_marker("2-font-found" if _find_cjk_font() else "2-font-missing")
 
 try:
     import cv2
     HAS_CV2 = True
 except ImportError:
     HAS_CV2 = False
+_boot_marker("3-cv2-done")
 
 from kivy.app import App
 from kivy.clock import Clock
@@ -100,6 +122,7 @@ from kivy.uix.label import Label
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.slider import Slider
 from kivy.uix.widget import Widget
+_boot_marker("4-kivy-imports-done")
 
 # Kivy 事件循环内的异常（时钟回调/触摸事件）默认不触发 sys.excepthook，
 # 这里挂一个 ExceptionHandler 把它们也写进崩溃日志。
@@ -120,6 +143,7 @@ _cjk_font = _find_cjk_font()
 if _cjk_font:
     from kivy.core.text import LabelBase
     LabelBase.register("Roboto", _cjk_font, _cjk_font, _cjk_font, _cjk_font)
+_boot_marker("5-font-registered:%s" % (_cjk_font or "none"))
 
 from color_engine import (
     Color,
@@ -131,6 +155,13 @@ from color_engine import (
     pigment_description,
 )
 from ai_assistant import ColorAdvisor
+_boot_marker("6-engine-imports-done")
+
+# safe-mode：上次启动没有完整跑到 build 结束 → 本次跳过 logo/启动画面，
+# 直接用文字版界面（若 logo 相关渲染是崩溃原因，这能让应用先跑起来）
+_SAFE_MODE = not _last_boot_completed()
+if _SAFE_MODE:
+    _boot_marker("safe-mode-on")
 
 # ── 主题色（按参考图2：iOS 浅色模式）──
 THEME = {
@@ -1193,39 +1224,40 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.2.2"
+        self.title = "AI 调色助手 v1.2.3"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
         self.main_box = BoxLayout(orientation="vertical", spacing=0)
         self.root.add_widget(self.main_box)
 
-        # ── 启动画面 ──
-        from kivy.uix.image import Image as KivyImage
-        splash = FloatLayout()
-        _bg(splash, DARK["bg"])
-        logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo.png")
-        if os.path.exists(logo_path):
-            try:
-                logo_img = KivyImage(
-                    source=logo_path, size_hint=(None, None),
-                    size=(dp(260), dp(180)), pos_hint={"center_x": 0.5, "center_y": 0.55},
-                    keep_ratio=True, allow_stretch=True,
-                )
-                splash.add_widget(logo_img)
-            except Exception as e:
-                crash_log.write_crash("[boot] logo load failed: %s\n" % (e,))
+        # ── 启动画面（safe-mode 下跳过 logo，只用文字，排除图片渲染问题）──
+        if not _SAFE_MODE:
+            from kivy.uix.image import Image as KivyImage
+            splash = FloatLayout()
+            _bg(splash, DARK["bg"])
+            logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo.png")
+            if os.path.exists(logo_path):
+                try:
+                    logo_img = KivyImage(
+                        source=logo_path, size_hint=(None, None),
+                        size=(dp(260), dp(180)), pos_hint={"center_x": 0.5, "center_y": 0.55},
+                        keep_ratio=True, allow_stretch=True,
+                    )
+                    splash.add_widget(logo_img)
+                except Exception as e:
+                    crash_log.write_crash("[boot] logo load failed: %s\n" % (e,))
+                    splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
+                                           color=(1, 1, 1, 1), halign="center"))
+            else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-        else:
-            splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
-                                   color=(1, 1, 1, 1), halign="center"))
-        splash.add_widget(_lbl("v1.2.2", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
-                               width=dp(60)))
-        splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
-        self.root.add_widget(splash)
-        _boot_marker("3-splash-added")
-        Clock.schedule_once(lambda dt: self._fade_out(splash), 2.0)
+            splash.add_widget(_lbl("v1.2.3", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+                                   width=dp(60)))
+            splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
+            self.root.add_widget(splash)
+            _boot_marker("7-splash-added")
+            Clock.schedule_once(lambda dt: self._fade_out(splash), 2.0)
 
         # ── 顶栏 ──
         title_bar = BoxLayout(size_hint=(1, None), height=dp(50), spacing=dp(6), padding=(dp(16), 0, dp(16), 0))
@@ -1248,7 +1280,7 @@ class ColorAssistantApp(App):
         self.info_panel = InfoPanel(size_hint=(0.40, 1) if landscape else (1, 0.40))
         body.add_widget(self.camera_view)
         body.add_widget(self.info_panel)
-        _boot_marker("4-body-created")
+        _boot_marker("8-body-created")
         self._body = body
         self.main_box.add_widget(body)
         Clock.schedule_once(lambda dt: self.camera_view._center_crosshair(), 0.5)
@@ -1276,7 +1308,7 @@ class ColorAssistantApp(App):
         self._current_color = None
         self.mix_screen = None
         Clock.schedule_once(self._init_camera, 1.0)
-        _boot_marker("5-build-returning")
+        _boot_marker("9-build-returning")
         return self.root
 
     def _fade_out(self, splash):
@@ -1353,4 +1385,5 @@ class ColorAssistantApp(App):
 
 
 if __name__ == "__main__":
+    _boot_marker("10-app-run-entering")
     ColorAssistantApp().run()
