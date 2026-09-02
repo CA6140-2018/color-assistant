@@ -6,6 +6,11 @@ import math
 import os
 import traceback
 
+# 崩溃日志必须最先安装（在任何 Kivy/jnius 导入之前），
+# 这样即使 Kivy 原生库加载失败，APP START 记录也已写入，可区分崩溃阶段。
+import crash_log
+_crash_path = crash_log.install()
+
 
 def _boot_paths():
     """boot.txt 候选路径：应用外部专属目录（用户可见）+ 脚本所在目录。"""
@@ -75,9 +80,6 @@ def _is_android():
         return False
 
 IS_ANDROID = _is_android()
-
-import crash_log
-_crash_path = crash_log.install()
 
 try:
     import cv2
@@ -1191,7 +1193,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.2.1"
+        self.title = "AI 调色助手 v1.2.2"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1218,7 +1220,7 @@ class ColorAssistantApp(App):
         else:
             splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                    color=(1, 1, 1, 1), halign="center"))
-        splash.add_widget(_lbl("v1.2.1", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+        splash.add_widget(_lbl("v1.2.2", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                width=dp(60)))
         splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
         self.root.add_widget(splash)

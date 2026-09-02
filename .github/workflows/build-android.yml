@@ -5,6 +5,9 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -111,9 +114,9 @@ jobs:
           echo "Unsigned APK: $UNSIGNED"
           ls -l "$UNSIGNED"
           # 对 unsigned APK 做 v2+v3 签名（apksigner 自动对齐，比 jarsigner 更稳）
-          # 版本号 = 1.2.1 + Git 短哈希，保证每个版本产物名不同、可溯源
+          # 版本号 = 1.2.2 + Git 短哈希，保证每个版本产物名不同、可溯源
           SHORT_SHA=$(echo "$GITHUB_SHA" | cut -c1-7)
-          VER="1.2.1-$SHORT_SHA"
+          VER="1.2.2-$SHORT_SHA"
           "$APKSIGNER" sign \
             --ks colorassistant-release.jks \
             --ks-key-alias colorassistant \
@@ -134,6 +137,27 @@ jobs:
           name: colorassistant-${{ env.SIGNED_APK }}
           path: bin/*.apk
           retention-days: 30
+
+      - name: Create GitHub Release (direct download link)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -ex
+          TAG="v${SIGNED_APK}"
+          APK_FILE=$(ls bin/colorassistant-*-release-signed.apk | head -1)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK_FILE" --clobber
+          else
+            gh release create "$TAG" "$APK_FILE" \
+              --title "ColorAssistant ${SIGNED_APK}" \
+              --target "$GITHUB_SHA" \
+              --notes "AI 调色助手 ${SIGNED_APK}
+
+          安装：直接下载下方 .apk 文件（无需登录、无需解压），手机上点击安装。
+          验证版本：启动画面和标题栏应显示 v1.2.2。"
+          fi
+          echo "=== Release URL ==="
+          echo "https://github.com/CA6140-2018/color-assistant/releases/tag/${TAG}"
 
       - name: Print build info
         if: always()
