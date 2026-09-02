@@ -4,22 +4,38 @@ AI 调色助手 - 主程序（设备安全渲染版）
 
 import math
 import os
+import traceback
 
-# ── 启动桩：在 Python 加载到 Kivy 初始化前的第一时间写标记，确认脚本是否被执行 ──
-_BOOT = os.path.join("/data/data/org.colorassistant/files", "boot.txt")
-try:
-    with open(_BOOT, "w", encoding="utf-8") as _f:
-        _f.write("1\n")
-except Exception:
-    pass
 
-# ── 启动阶段标记（用于诊断闪退发生在哪个阶段）──
-def _boot_stage(stage):
+def _boot_paths():
+    """boot.txt 候选路径：应用外部专属目录（用户可见）+ 脚本所在目录。"""
+    paths = []
     try:
-        with open(_BOOT, "a", encoding="utf-8") as _f:
-            _f.write("stage=%d\n" % stage)
+        from jnius import autoclass
+        activity = autoclass("org.kivy.android.PythonActivity").mActivity
+        d = activity.getExternalFilesDir(None)
+        if d is not None:
+            paths.append(os.path.join(d.getAbsolutePath(), "boot.txt"))
     except Exception:
         pass
+    paths.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "boot.txt"))
+    return paths
+
+
+def _boot_marker(stage):
+    """启动阶段标记：即使闪退也能知道执行到了哪一步。"""
+    import time as _t
+    line = "stage=%s %s\n" % (stage, _t.strftime("%Y-%m-%d %H:%M:%S"))
+    for p in _boot_paths():
+        try:
+            with open(p, "a", encoding="utf-8") as _f:
+                _f.write(line)
+            return
+        except Exception:
+            continue
+
+
+_boot_marker("1-python-started")
 
 # ── 中文字体注册（Android 默认字体不支持中文）──
 _FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
@@ -82,6 +98,21 @@ from kivy.uix.label import Label
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.slider import Slider
 from kivy.uix.widget import Widget
+
+# Kivy 事件循环内的异常（时钟回调/触摸事件）默认不触发 sys.excepthook，
+# 这里挂一个 ExceptionHandler 把它们也写进崩溃日志。
+try:
+    from kivy.base import ExceptionManager, ExceptionHandler
+
+    class _KivyCrashWriter(ExceptionHandler):
+        def handle_exception(self, inst):
+            tb = "".join(traceback.format_exception(type(inst), inst, inst.__traceback__))
+            crash_log.write_crash("\n----- KIVY CRASH -----\n%s\n" % tb)
+            return ExceptionManager.RAISE
+
+    ExceptionManager.add_handler(_KivyCrashWriter())
+except Exception:
+    pass
 
 _cjk_font = _find_cjk_font()
 if _cjk_font:
@@ -1096,8 +1127,68 @@ def request_android_camera_permission(callback=None):
 
 class ColorAssistantApp(App):
     def build(self):
-        _boot_stage(2)
-        return self._build_impl()
+        _boot_marker("2-build-entered")
+        try:
+            root = self._build_impl()
+            # 启动成功后，若上次运行曾崩溃，弹出上次的堆栈供截图回传
+            Clock.schedule_once(lambda dt: self._show_last_crash(), 0.6)
+            return root
+        except Exception as e:
+            tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+            crash_log.write_crash("\n----- BUILD CRASH -----\n%s\n" % tb)
+            _boot_marker("build-failed")
+            self._build_failed = True
+            return self._error_screen(tb)
+
+    def _error_screen(self, tb):
+        """构建失败时显示错误堆栈（用户可直接截图回传，不依赖文件传输）。"""
+        box = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(8))
+        _bg(box, THEME["bg"])
+        box.add_widget(_lbl("启动出错 - 请截图发回开发者", size=dp(30),
+                             font_size=dp(15), bold=True, color=THEME["danger"]))
+        sv = ScrollView()
+        content = Label(
+            text=tb or "未知错误", font_size=dp(11), size_hint_y=None,
+            color=(0.15, 0.15, 0.15, 1), halign="left", valign="top",
+        )
+        content.bind(texture_size=lambda i, v: setattr(content, "height", v[1]))
+        content.bind(width=lambda i, v: setattr(content, "text_size", (v[0], None)))
+        sv.add_widget(content)
+        box.add_widget(sv)
+        btn = Button(text="关闭应用", size_hint=(1, None), height=dp(46),
+                     background_color=THEME["danger"], color=(1, 1, 1, 1))
+        btn.bind(on_release=lambda *a: App.get_running_app().stop())
+        box.add_widget(btn)
+        return box
+
+    def _show_last_crash(self):
+        """弹窗显示上次运行的崩溃堆栈（弹一次，截图即可）。"""
+        try:
+            seg = crash_log.pop_unshown_crash()
+            if not seg:
+                return
+            from kivy.uix.popup import Popup
+            box = BoxLayout(orientation="vertical", padding=dp(10), spacing=dp(8))
+            box.add_widget(_lbl("上次运行崩溃记录 - 请截图发回", size=dp(30),
+                                 font_size=dp(14), bold=True, color=THEME["danger"]))
+            sv = ScrollView()
+            content = Label(
+                text=seg, font_size=dp(10), size_hint_y=None,
+                color=(0.15, 0.15, 0.15, 1), halign="left", valign="top",
+            )
+            content.bind(texture_size=lambda i, v: setattr(content, "height", v[1]))
+            content.bind(width=lambda i, v: setattr(content, "text_size", (v[0], None)))
+            sv.add_widget(content)
+            box.add_widget(sv)
+            btn = Button(text="关闭", size_hint=(1, None), height=dp(44),
+                         background_color=THEME["label_2"], color=(1, 1, 1, 1))
+            box.add_widget(btn)
+            popup = Popup(title="崩溃诊断", content=box,
+                          size_hint=(0.95, 0.85), auto_dismiss=True)
+            btn.bind(on_release=popup.dismiss)
+            popup.open()
+        except Exception:
+            pass
 
     def _build_impl(self):
         self.title = "AI 调色助手 v1.2.1"
@@ -1131,7 +1222,7 @@ class ColorAssistantApp(App):
                                width=dp(60)))
         splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
         self.root.add_widget(splash)
-        _boot_stage(3)
+        _boot_marker("3-splash-added")
         Clock.schedule_once(lambda dt: self._fade_out(splash), 2.0)
 
         # ── 顶栏 ──
@@ -1155,7 +1246,7 @@ class ColorAssistantApp(App):
         self.info_panel = InfoPanel(size_hint=(0.40, 1) if landscape else (1, 0.40))
         body.add_widget(self.camera_view)
         body.add_widget(self.info_panel)
-        _boot_stage(4)
+        _boot_marker("4-body-created")
         self._body = body
         self.main_box.add_widget(body)
         Clock.schedule_once(lambda dt: self.camera_view._center_crosshair(), 0.5)
@@ -1183,15 +1274,20 @@ class ColorAssistantApp(App):
         self._current_color = None
         self.mix_screen = None
         Clock.schedule_once(self._init_camera, 1.0)
-        _boot_stage(5)
+        _boot_marker("5-build-returning")
         return self.root
 
     def _fade_out(self, splash):
         def _do(dt):
-            self.root.remove_widget(splash)
+            try:
+                self.root.remove_widget(splash)
+            except Exception:
+                pass
         Clock.schedule_once(_do, 0.5)
 
     def _init_camera(self, dt):
+        if getattr(self, "_build_failed", False):
+            return
         crash_log.write_crash("[init] _init_camera called\n")
         request_android_camera_permission(self._on_permission_result)
         # 安全兜底：如果 5 秒后摄像头还没启动，尝试强制启动

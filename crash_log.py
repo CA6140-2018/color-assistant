@@ -61,14 +61,37 @@ def _candidate_paths():
     try:
         src_dir = os.path.dirname(os.path.abspath(__file__))
         paths.append(os.path.join(src_dir, "crash_log.txt"))
-        # 也用 /data/data/<包名>/files/ 作为补充
-        for p in ("/data/data/org.colorassistant/files",):
-            if os.path.isdir(p):
-                paths.append(os.path.join(p, "crash_log.txt"))
     except Exception:
         pass
 
     return paths
+
+
+def pop_unshown_crash():
+    """读出尚未展示过的最近一次崩溃堆栈；没有则返回 None。
+
+    读到后在日志尾部追加 SHOWN 标记，避免下次启动重复弹出。
+    """
+    for p in _candidate_paths():
+        try:
+            if not os.path.isfile(p):
+                continue
+            with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                text = f.read()
+            idx = text.rfind("----- SHOWN")
+            recent = text[idx:] if idx >= 0 else text
+            c = recent.rfind("----- CRASH")
+            if c < 0:
+                continue
+            seg = recent[c:].strip()
+            if len(seg) < 20:
+                continue
+            with open(p, "a", encoding="utf-8") as f:
+                f.write("\n----- SHOWN %s -----\n" % time.strftime("%Y-%m-%d %H:%M:%S"))
+            return seg[:4000]
+        except Exception:
+            continue
+    return None
 
 
 def _write(path, text):
