@@ -1,19 +1,25 @@
 """
 AI 调色助手 - 主程序（设备安全渲染版）
-
-针对部分 Android GPU 驱动不支持 Kivy 矩阵变换/Line/Ellipse 指令的问题，
-本版本只使用 Rectangle / RoundedRectangle / Label 等默认 shader 必通的图元：
-- 摄像头旋转改用纹理坐标映射（tex_coords），不做 GPU 矩阵变换
-- 比例条/色块/卡片全部用矩形绘制
-- 准星/取样点用文字符号表示
-
-功能（模板两屏）：
-1. 色彩分析：点击取色 → 色块+名称+HEX、商用色卡匹配、调色配方比例条、和谐配色、完整报告
-2. AI 调色辅助：点击取色实时 ΔE、差量加料建议、干/潮物检测、取样大小调节、白卡校色
 """
 
 import math
 import os
+
+# ── 启动桩：在 Python 加载到 Kivy 初始化前的第一时间写标记，确认脚本是否被执行 ──
+_BOOT = os.path.join("/data/data/org.colorassistant/files", "boot.txt")
+try:
+    with open(_BOOT, "w", encoding="utf-8") as _f:
+        _f.write("1\n")
+except Exception:
+    pass
+
+# ── 启动阶段标记（用于诊断闪退发生在哪个阶段）──
+def _boot_stage(stage):
+    try:
+        with open(_BOOT, "a", encoding="utf-8") as _f:
+            _f.write("stage=%d\n" % stage)
+    except Exception:
+        pass
 
 # ── 中文字体注册（Android 默认字体不支持中文）──
 _FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
@@ -1090,26 +1096,8 @@ def request_android_camera_permission(callback=None):
 
 class ColorAssistantApp(App):
     def build(self):
-        import traceback as _tb_
-        # 诊断：build 已进入
-        try:
-            crash_log.write_crash("[boot] build() entered\n")
-        except Exception:
-            pass
-        try:
-            return self._build_impl()
-        except Exception as e:
-            tb = _tb_.format_exc()
-            try:
-                with open(crash_log._crash_file() or "crash_log.txt", "w", encoding="utf-8") as _f:
-                    _f.write("===== BUILD CRASH =====\n%s\n%s\n" % (e, tb))
-            except Exception:
-                try:
-                    with open("/data/data/org.colorassistant/files/crash_log.txt", "w", encoding="utf-8") as _f:
-                        _f.write("===== BUILD CRASH =====\n%s\n%s\n" % (e, tb))
-                except Exception:
-                    pass
-            raise
+        _boot_stage(2)
+        return self._build_impl()
 
     def _build_impl(self):
         self.title = "AI 调色助手 v1.2.1"
@@ -1143,11 +1131,7 @@ class ColorAssistantApp(App):
                                width=dp(60)))
         splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
         self.root.add_widget(splash)
-        try:
-            crash_log.write_crash("[boot] splash screen added\n")
-        except Exception:
-            pass
-        # 2秒后淡出启动画面
+        _boot_stage(3)
         Clock.schedule_once(lambda dt: self._fade_out(splash), 2.0)
 
         # ── 顶栏 ──
@@ -1171,10 +1155,7 @@ class ColorAssistantApp(App):
         self.info_panel = InfoPanel(size_hint=(0.40, 1) if landscape else (1, 0.40))
         body.add_widget(self.camera_view)
         body.add_widget(self.info_panel)
-        try:
-            crash_log.write_crash("[boot] CameraView + InfoPanel created\n")
-        except Exception:
-            pass
+        _boot_stage(4)
         self._body = body
         self.main_box.add_widget(body)
         Clock.schedule_once(lambda dt: self.camera_view._center_crosshair(), 0.5)
@@ -1202,10 +1183,7 @@ class ColorAssistantApp(App):
         self._current_color = None
         self.mix_screen = None
         Clock.schedule_once(self._init_camera, 1.0)
-        try:
-            crash_log.write_crash("[boot] build() returning\n")
-        except Exception:
-            pass
+        _boot_stage(5)
         return self.root
 
     def _fade_out(self, splash):
