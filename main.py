@@ -1090,6 +1090,28 @@ def request_android_camera_permission(callback=None):
 
 class ColorAssistantApp(App):
     def build(self):
+        import traceback as _tb_
+        # 诊断：build 已进入
+        try:
+            crash_log.write_crash("[boot] build() entered\n")
+        except Exception:
+            pass
+        try:
+            return self._build_impl()
+        except Exception as e:
+            tb = _tb_.format_exc()
+            try:
+                with open(crash_log._crash_file() or "crash_log.txt", "w", encoding="utf-8") as _f:
+                    _f.write("===== BUILD CRASH =====\n%s\n%s\n" % (e, tb))
+            except Exception:
+                try:
+                    with open("/data/data/org.colorassistant/files/crash_log.txt", "w", encoding="utf-8") as _f:
+                        _f.write("===== BUILD CRASH =====\n%s\n%s\n" % (e, tb))
+                except Exception:
+                    pass
+            raise
+
+    def _build_impl(self):
         self.title = "AI 调色助手 v1.2.1"
         Window.clearcolor = THEME["bg"]
 
@@ -1103,12 +1125,17 @@ class ColorAssistantApp(App):
         _bg(splash, DARK["bg"])
         logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo.png")
         if os.path.exists(logo_path):
-            logo_img = KivyImage(
-                source=logo_path, size_hint=(None, None),
-                size=(dp(260), dp(180)), pos_hint={"center_x": 0.5, "center_y": 0.55},
-                keep_ratio=True, allow_stretch=True,
-            )
-            splash.add_widget(logo_img)
+            try:
+                logo_img = KivyImage(
+                    source=logo_path, size_hint=(None, None),
+                    size=(dp(260), dp(180)), pos_hint={"center_x": 0.5, "center_y": 0.55},
+                    keep_ratio=True, allow_stretch=True,
+                )
+                splash.add_widget(logo_img)
+            except Exception as e:
+                crash_log.write_crash("[boot] logo load failed: %s\n" % (e,))
+                splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
+                                       color=(1, 1, 1, 1), halign="center"))
         else:
             splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                    color=(1, 1, 1, 1), halign="center"))
@@ -1116,6 +1143,10 @@ class ColorAssistantApp(App):
                                width=dp(60)))
         splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
         self.root.add_widget(splash)
+        try:
+            crash_log.write_crash("[boot] splash screen added\n")
+        except Exception:
+            pass
         # 2秒后淡出启动画面
         Clock.schedule_once(lambda dt: self._fade_out(splash), 2.0)
 
@@ -1140,6 +1171,10 @@ class ColorAssistantApp(App):
         self.info_panel = InfoPanel(size_hint=(0.40, 1) if landscape else (1, 0.40))
         body.add_widget(self.camera_view)
         body.add_widget(self.info_panel)
+        try:
+            crash_log.write_crash("[boot] CameraView + InfoPanel created\n")
+        except Exception:
+            pass
         self._body = body
         self.main_box.add_widget(body)
         Clock.schedule_once(lambda dt: self.camera_view._center_crosshair(), 0.5)
@@ -1167,6 +1202,10 @@ class ColorAssistantApp(App):
         self._current_color = None
         self.mix_screen = None
         Clock.schedule_once(self._init_camera, 1.0)
+        try:
+            crash_log.write_crash("[boot] build() returning\n")
+        except Exception:
+            pass
         return self.root
 
     def _fade_out(self, splash):

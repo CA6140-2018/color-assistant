@@ -57,6 +57,17 @@ def _candidate_paths():
     except Exception:
         pass
 
+    # 4) 应用源码目录（绝对保底，Android 上也可写）
+    try:
+        src_dir = os.path.dirname(os.path.abspath(__file__))
+        paths.append(os.path.join(src_dir, "crash_log.txt"))
+        # 也用 /data/data/<包名>/files/ 作为补充
+        for p in ("/data/data/org.colorassistant/files",):
+            if os.path.isdir(p):
+                paths.append(os.path.join(p, "crash_log.txt"))
+    except Exception:
+        pass
+
     return paths
 
 
