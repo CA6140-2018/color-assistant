@@ -46,21 +46,47 @@ def _boot_marker(stage):
             continue
 
 
-def _last_boot_completed() -> bool:
-    """上次启动是否完整跑到 build 结束（用于 safe-mode 判定）。"""
+def _boot_flag_file():
+    """safe-mode 标志文件路径（与 boot.txt 同目录）。"""
     for p in _boot_paths():
-        try:
-            if not os.path.isfile(p):
-                continue
-            with open(p, "r", encoding="utf-8", errors="ignore") as _f:
-                text = _f.read()
-            return "9-build-returning" in text
-        except Exception:
-            continue
-    return False
+        return os.path.join(os.path.dirname(p), "boot_incomplete.flag")
+    return "boot_incomplete.flag"
+
+
+def _last_boot_completed() -> bool:
+    """上次启动是否完整跑过（用于 safe-mode 判定）。
+
+    旧逻辑在追加模式的 boot.txt 里检索 "9-build-returning"：只要历史上有
+    一次成功记录，safe-mode 就永远不再触发，判定失效，已废弃。
+    改为独立标志文件：启动早期创建、稳定运行 5 秒后删除——
+    文件存在即意味着上次启动没有跑完。
+    """
+    return not os.path.isfile(_boot_flag_file())
+
+
+def _mark_boot_incomplete():
+    try:
+        with open(_boot_flag_file(), "w", encoding="utf-8") as _f:
+            _f.write("in-progress")
+            _f.flush()
+            os.fsync(_f.fileno())
+    except Exception:
+        pass
+
+
+def _mark_boot_complete():
+    try:
+        os.remove(_boot_flag_file())
+    except Exception:
+        pass
 
 
 _boot_marker("1-python-started")
+# 先判定（此时标志文件若存在，是上次启动留下的），再为本次启动落标志
+_SAFE_MODE = not _last_boot_completed()
+_mark_boot_incomplete()
+if _SAFE_MODE:
+    _boot_marker("safe-mode-on")
 
 # ── 中文字体注册（Android 默认字体不支持中文）──
 _FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
@@ -140,10 +166,15 @@ except Exception:
     pass
 
 _cjk_font = _find_cjk_font()
-if _cjk_font:
-    from kivy.core.text import LabelBase
-    LabelBase.register("Roboto", _cjk_font, _cjk_font, _cjk_font, _cjk_font)
-_boot_marker("5-font-registered:%s" % (_cjk_font or "none"))
+if _SAFE_MODE:
+    # safe-mode：字体注册是疑似原生崩溃点之一，本次跳过（中文将显示为方框），
+    # 先换取应用能启动、诊断日志能落盘
+    _boot_marker("5-font-skipped-safe-mode")
+else:
+    if _cjk_font:
+        from kivy.core.text import LabelBase
+        LabelBase.register("Roboto", _cjk_font, _cjk_font, _cjk_font, _cjk_font)
+    _boot_marker("5-font-registered:%s" % (_cjk_font or "none"))
 
 from color_engine import (
     Color,
@@ -156,12 +187,6 @@ from color_engine import (
 )
 from ai_assistant import ColorAdvisor
 _boot_marker("6-engine-imports-done")
-
-# safe-mode：上次启动没有完整跑到 build 结束 → 本次跳过 logo/启动画面，
-# 直接用文字版界面（若 logo 相关渲染是崩溃原因，这能让应用先跑起来）
-_SAFE_MODE = not _last_boot_completed()
-if _SAFE_MODE:
-    _boot_marker("safe-mode-on")
 
 # ── 主题色（按参考图2：iOS 浅色模式）──
 THEME = {
@@ -1160,7 +1185,7 @@ def request_android_camera_permission(callback=None):
 
 class ColorAssistantApp(App):
     def build(self):
-        _boot_marker("2-build-entered")
+        _boot_marker("7-build-entered")
         try:
             root = self._build_impl()
             # 启动成功后，若上次运行曾崩溃，弹出上次的堆栈供截图回传
@@ -1224,7 +1249,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.2.3"
+        self.title = "AI 调色助手 v1.2.4"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1386,4 +1411,6 @@ class ColorAssistantApp(App):
 
 if __name__ == "__main__":
     _boot_marker("10-app-run-entering")
+    # 稳定运行 5 秒后才算"启动完成"：覆盖首帧渲染等最易崩溃的阶段
+    Clock.schedule_once(lambda dt: _mark_boot_complete(), 5.0)
     ColorAssistantApp().run()

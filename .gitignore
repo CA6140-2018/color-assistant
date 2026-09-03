@@ -28,6 +28,9 @@ android-ndk/
 .DS_Store
 Thumbs.db
 
+# TRAE 工具产物（文件名含非法字符，进 private.tar 会引发安卓解压崩溃）
+*trae-sshknown_hosts
+
 # Fonts (NotoSansSC-Regular.otf 已提交入库，保证构建不依赖 CDN)
 
 # Local build artifacts / checks (not for GitHub)
