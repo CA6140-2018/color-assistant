@@ -257,39 +257,31 @@ def _bg(widget, rgba, radius=0, shadow=False):
 
 
 def _card_bg(widget, radius=dp(12)):
-    """iOS 卡片背景：白色圆角。"""
+    """iOS 卡片背景：白色圆角。指令只创建一次，pos/size 变化时增量更新。
+
+    禁止 canvas.clear()+重建：clear 发生在布局期会破坏 Kivy 图形编译器的
+    指令状态（v1.2.5 首帧 StencilPop 栈下溢闪退的根因）。
+    """
     with widget.canvas.before:
         GColor(*THEME["card"])
-        RoundedRectangle(pos=widget.pos, size=widget.size, radius=[radius])
+        rect = RoundedRectangle(pos=widget.pos, size=widget.size, radius=[radius])
     widget.bind(
-        pos=lambda i, v: _update_card_bg(i, v, radius),
-        size=lambda i, v: _update_card_bg(i, v, radius),
+        pos=lambda i, v, r=rect: setattr(r, "pos", i.pos),
+        size=lambda i, v, r=rect: setattr(r, "size", i.size),
     )
-
-
-def _update_card_bg(widget, val, radius):
-    widget.canvas.before.clear()
-    with widget.canvas.before:
-        GColor(*THEME["card"])
-        RoundedRectangle(pos=widget.pos, size=widget.size, radius=[radius])
+    return rect
 
 
 def _dark_card_bg(widget, radius=dp(12)):
-    """深色卡片背景（参考图1）。"""
+    """深色卡片背景（参考图1）。增量更新，见 _card_bg 注释。"""
     with widget.canvas.before:
         GColor(*DARK["card"])
-        RoundedRectangle(pos=widget.pos, size=widget.size, radius=[radius])
+        rect = RoundedRectangle(pos=widget.pos, size=widget.size, radius=[radius])
     widget.bind(
-        pos=lambda i, v: _update_dark_card_bg(i, v, radius),
-        size=lambda i, v: _update_dark_card_bg(i, v, radius),
+        pos=lambda i, v, r=rect: setattr(r, "pos", i.pos),
+        size=lambda i, v, r=rect: setattr(r, "size", i.size),
     )
-
-
-def _update_dark_card_bg(widget, val, radius):
-    widget.canvas.before.clear()
-    with widget.canvas.before:
-        GColor(*DARK["card"])
-        RoundedRectangle(pos=widget.pos, size=widget.size, radius=[radius])
+    return rect
 
 
 def _lbl(text, size=None, font_size=None, color=None, bold=False, halign="left", width=None):
@@ -310,25 +302,25 @@ def _lbl(text, size=None, font_size=None, color=None, bold=False, halign="left",
     return l
 
 
-def _update_sep(widget, val):
-    widget.canvas.after.clear()
+def _sep_line(widget, rgba, top=False):
+    """分隔线（0.5px）：canvas.after 一次性创建，pos/size 增量更新。"""
     with widget.canvas.after:
-        GColor(0.78, 0.78, 0.80, 1)
-        Rectangle(pos=(widget.x, widget.y), size=(widget.width, 0.5))
-
-
-def _update_toolbar_sep(widget, val):
-    widget.canvas.after.clear()
-    with widget.canvas.after:
-        GColor(0.78, 0.78, 0.80, 1)
-        Rectangle(pos=(widget.x, widget.y + widget.height), size=(widget.width, 0.5))
-
-
-def _update_mix_sep(widget, val):
-    widget.canvas.after.clear()
-    with widget.canvas.after:
-        GColor(0.22, 0.22, 0.25, 1)
-        Rectangle(pos=(widget.x, widget.y), size=(widget.width, 0.5))
+        GColor(*rgba)
+        if top:
+            rect = Rectangle(pos=(widget.x, widget.y + widget.height), size=(widget.width, 0.5))
+        else:
+            rect = Rectangle(pos=widget.pos, size=(widget.width, 0.5))
+    if top:
+        widget.bind(
+            pos=lambda i, v, r=rect: setattr(r, "pos", (i.x, i.y + i.height)),
+            size=lambda i, v, r=rect: setattr(r, "size", (i.width, 0.5)),
+        )
+    else:
+        widget.bind(
+            pos=lambda i, v, r=rect: setattr(r, "pos", i.pos),
+            size=lambda i, v, r=rect: setattr(r, "size", (i.width, 0.5)),
+        )
+    return rect
 
 
 # ──────────────────────────────────────────────
@@ -383,10 +375,12 @@ class CameraView(FloatLayout):
         self._camera_started = False
         self._rotation = 90 if IS_ANDROID else 0
 
-        # 暗色背景占满（让摄像头区域不是白色）
-        with self.canvas:
+        # 暗色背景占满（让摄像头区域不是白色）。
+        # 画在 canvas.before 且只更新属性：子控件画布挂在主 canvas 里，
+        # clear() 会把子控件全部移出渲染树
+        with self.canvas.before:
             GColor(0.039, 0.086, 0.157, 1)  # DARK["bg"]
-            Rectangle(pos=self.pos, size=self.size)
+            self._bg_rect = Rectangle(pos=self.pos, size=self.size)
         self.bind(pos=self._update_bg, size=self._update_bg)
 
         self.tex_view = TexView(size_hint=(1, 1))
@@ -431,10 +425,8 @@ class CameraView(FloatLayout):
         self.crosshair_outline.center = self.center
 
     def _update_bg(self, *args):
-        self.canvas.clear()
-        with self.canvas:
-            GColor(0.039, 0.086, 0.157, 1)
-            Rectangle(pos=self.pos, size=self.size)
+        self._bg_rect.pos = self.pos
+        self._bg_rect.size = self.size
 
     def rotate_cw(self):
         if HAS_CV2 and not IS_ANDROID:
@@ -687,10 +679,12 @@ class InfoPanel(ScrollView):
         self.do_scroll_x = False
         self.bar_width = dp(2)
         self.bar_color = (0.78, 0.78, 0.80, 1)
-        # 白色背景
+        # 白色背景。绝不能 clear()：ScrollView 模板把 StencilPush/StencilUse
+        # 放在 canvas.before，clear 掉后 canvas.after 的 StencilPop 必然
+        # 栈下溢——这是 v1.2.5 及之前首帧闪退的真正根因
         with self.canvas.before:
             GColor(1, 1, 1, 1)
-            Rectangle(pos=self.pos, size=self.size)
+            self._bg_rect = Rectangle(pos=self.pos, size=self.size)
         self.bind(pos=self._update_bg, size=self._update_bg)
         self.container = BoxLayout(
             orientation="vertical", size_hint_y=None, spacing=dp(12), padding=(dp(16), dp(12), dp(16), dp(12)),
@@ -724,10 +718,8 @@ class InfoPanel(ScrollView):
         c.add_widget(_lbl("点击摄像头画面取色", size=dp(40), font_size=dp(12), color=THEME["label_2"], halign="center"))
 
     def _update_bg(self, *args):
-        self.canvas.before.clear()
-        with self.canvas.before:
-            GColor(1, 1, 1, 1)
-            Rectangle(pos=self.pos, size=self.size)
+        self._bg_rect.pos = self.pos
+        self._bg_rect.size = self.size
 
     def _clear(self):
         self.container.clear_widgets()
@@ -1259,7 +1251,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.2.5"
+        self.title = "AI 调色助手 v1.2.6"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1287,7 +1279,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.2.3", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.2.6", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
@@ -1297,10 +1289,7 @@ class ColorAssistantApp(App):
         # ── 顶栏 ──
         title_bar = BoxLayout(size_hint=(1, None), height=dp(50), spacing=dp(6), padding=(dp(16), 0, dp(16), 0))
         _bg(title_bar, THEME["card"])
-        with title_bar.canvas.after:
-            GColor(0.78, 0.78, 0.80, 0.5)
-            Rectangle(pos=(title_bar.x, title_bar.y), size=(title_bar.width, 0.5))
-        title_bar.bind(pos=lambda i, v: _update_sep(i, v), size=lambda i, v: _update_sep(i, v))
+        _sep_line(title_bar, (0.78, 0.78, 0.80, 0.5))
 
         title_bar.add_widget(Label(text="颜色配比分析", size_hint=(1, 1), font_size=dp(17), color=THEME["label"], bold=True))
         self.main_box.add_widget(title_bar)
@@ -1323,10 +1312,7 @@ class ColorAssistantApp(App):
         # ── 工具栏 ──
         toolbar = BoxLayout(size_hint=(1, None), height=dp(56), spacing=dp(8), padding=(dp(16), dp(8), dp(16), dp(10)))
         _bg(toolbar, THEME["card"])
-        with toolbar.canvas.after:
-            GColor(0.78, 0.78, 0.80, 0.5)
-            Rectangle(pos=(toolbar.x, toolbar.y + toolbar.height), size=(toolbar.width, 0.5))
-        toolbar.bind(pos=lambda i, v: _update_toolbar_sep(i, v), size=lambda i, v: _update_toolbar_sep(i, v))
+        _sep_line(toolbar, (0.78, 0.78, 0.80, 0.5), top=True)
 
         def _btn(text, color, cb, width=None):
             b = Button(
