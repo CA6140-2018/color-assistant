@@ -757,11 +757,18 @@ class InfoPanel(ScrollView):
         )
         _bg(left, left_color, radius=dp(4))
         row.add_widget(left)
-        right = Label(
-            text=right_label, font_size=dp(10), color=right_color, bold=True,
-            size_hint=(None, 1), width=dp(28), halign="center", valign="middle",
-        )
-        _bg(right, right_color, radius=dp(4)) if right_color != (1, 1, 1, 1) else None
+        # 右侧标签：彩色底用白字；白色端无底色，用深灰字（白字在浅底上不可见）
+        if right_color == (1, 1, 1, 1):
+            right = Label(
+                text=right_label, font_size=dp(10), color=(0.35, 0.35, 0.4, 1), bold=True,
+                size_hint=(None, 1), width=dp(28), halign="center", valign="middle",
+            )
+        else:
+            right = Label(
+                text=right_label, font_size=dp(10), color=(1, 1, 1, 1), bold=True,
+                size_hint=(None, 1), width=dp(28), halign="center", valign="middle",
+            )
+            _bg(right, right_color, radius=dp(4))
         slider = Slider(min=0, max=100, value=value, size_hint=(1, 1))
         slider.bind(value=callback)
         row.add_widget(slider)
@@ -1251,7 +1258,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.2.6"
+        self.title = "AI 调色助手 v1.2.7"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1279,7 +1286,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.2.6", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.2.7", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
@@ -1400,7 +1407,9 @@ class ColorAssistantApp(App):
         landscape = Window.width > Window.height and Window.width > 600
         self.camera_view.size_hint = (0.60, 1) if landscape else (1, 0.60)
         self.mix_screen.cam_area.remove_widget(self.camera_view)
-        self._body.add_widget(self.camera_view, index=0)
+        # 必须插到 children 末尾：竖向 BoxLayout 里 children[0] 排底部，
+        # index=0 会把摄像头放到底部——布局颠倒的根因
+        self._body.add_widget(self.camera_view, index=len(self._body.children))
         self.root.remove_widget(self.mix_screen)
         self.mix_screen = None
 
