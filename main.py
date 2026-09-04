@@ -4,6 +4,7 @@ AI 调色助手 - 主程序（设备安全渲染版）
 
 import math
 import os
+import threading
 import traceback
 
 # 崩溃日志必须最先安装（在任何 Kivy/jnius 导入之前），
@@ -947,18 +948,17 @@ class AiMixScreen(BoxLayout):
         bar.add_widget(Label(text="AI辅助调色", size_hint=(1, 1), font_size=dp(16), color=DARK["text"], bold=True))
         self.add_widget(bar)
 
-        # ── 摄像头区（点击取中心色） ──
+        # ── 摄像头区（点击画面任意位置 = 选取目标模板色） ──
         self.cam_area = FloatLayout()
-        self.cam_area.size_hint = (1, 0.60)
+        self.cam_area.size_hint = (1, 0.55)
         _bg(self.cam_area, DARK["bg"])
-        # 点击取色提示
-        tip = Label(
-            text="点击画面取色", font_size=dp(14), color=DARK["sub"],
-            size_hint=(None, None), size=(dp(120), dp(30)),
-            pos_hint={"center_x": 0.5, "center_y": 0.5},
+        self.tip = Label(
+            text="点击画面任意位置，选取目标模板色", font_size=dp(13), color=DARK["sub"],
+            size_hint=(None, None), size=(dp(260), dp(26)),
+            pos_hint={"center_x": 0.5, "y": 0.08},
         )
-        self.cam_area.add_widget(tip)
-        # 准星
+        self.cam_area.add_widget(self.tip)
+        # 中心准星：实时监测当前混合色
         self._crosshair = Label(
             text="＋", font_size=dp(24), color=(1, 1, 1, 0.8),
             size_hint=(None, None), size=(dp(32), dp(32)),
@@ -968,19 +968,22 @@ class AiMixScreen(BoxLayout):
         self.add_widget(self.cam_area)
 
         # ── 底部面板（参考图1：深色大圆角卡片） ──
-        bottom = BoxLayout(orientation="vertical", size_hint=(1, 0.50), spacing=dp(6), padding=(dp(12), dp(8), dp(12), dp(12)))
+        bottom = BoxLayout(orientation="vertical", size_hint=(1, 0.45), spacing=dp(6), padding=(dp(12), dp(8), dp(12), dp(12)))
         _bg(bottom, DARK["bg"], radius=dp(24))
         panel = BoxLayout(orientation="vertical", size_hint=(1, 1), spacing=dp(6), padding=(dp(0), dp(0), dp(0), dp(0)))
         _bg(panel, DARK["bar"])
         bottom.add_widget(panel)
         self.add_widget(bottom)
 
-        # ΔE 行（参考图1：金色大字）
+        # ΔE 行（参考图1：金色大字）+ 目标色小色块
         delta_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(36), spacing=dp(8), padding=(dp(12), 0, dp(12), 0))
         delta_row.add_widget(Label(text="色差", font_size=dp(14), color=DARK["text"], size_hint=(1, 1), halign="left", valign="middle"))
+        self.target_swatch = SwatchWidget(size_hint=(None, 1), width=dp(30))
+        self.target_swatch.set_color(None)
+        delta_row.add_widget(self.target_swatch)
         self.delta_lbl = Label(
-            text="--", size_hint=(None, 1), width=dp(80),
-            font_size=dp(24), color=DARK["gold"], bold=True, halign="right", valign="middle",
+            text="ΔE --", size_hint=(None, 1), width=dp(80),
+            font_size=dp(22), color=DARK["gold"], bold=True, halign="right", valign="middle",
         )
         self.delta_lbl.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
         delta_row.add_widget(self.delta_lbl)
@@ -1033,25 +1036,11 @@ class AiMixScreen(BoxLayout):
         mid_row.add_widget(self._pct_lbl)
         panel.add_widget(mid_row)
 
-        # 色彩成分分析（参考图1：黄/红/黑进度条）
-        comp_row = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(2), padding=(dp(12), 0, dp(12), dp(4)))
-        comp_row.bind(minimum_height=comp_row.setter("height"))
-        panel.add_widget(comp_row)
-
-        self._comp_bars = []
-        for label, color_tuple in [("黄色", DARK["yellow"]), ("红色", DARK["orange"]), ("黑色", (0.6, 0.6, 0.6, 1))]:
-            item = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(22), spacing=dp(6))
-            dot = Label(text="●", size_hint=(None, 1), width=dp(16), font_size=dp(8), color=color_tuple, valign="middle")
-            item.add_widget(dot)
-            item.add_widget(Label(text=label, size_hint=(None, 1), width=dp(36), font_size=dp(11), color=DARK["text"], halign="left", valign="middle"))
-            bar_w = RatioBar(size_hint=(1, 1))
-            bar_w._fill = color_tuple
-            bar_w.set_ratio(0.5)
-            item.add_widget(bar_w)
-            pct = Label(text="+0.0%", size_hint=(None, 1), width=dp(44), font_size=dp(10), color=DARK["sub"], valign="middle")
-            item.add_widget(pct)
-            self._comp_bars.append((bar_w, pct))
-            comp_row.add_widget(item)
+        # 目标基色配方（点击选取目标后按 8 基色减色模型计算，后台线程生成）
+        self._comp_row = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(2), padding=(dp(12), 0, dp(12), dp(4)))
+        self._comp_row.bind(minimum_height=self._comp_row.setter("height"))
+        panel.add_widget(self._comp_row)
+        self._render_recipe(None)
 
         # 加料建议容器
         self.advice_box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(2), padding=(dp(0), 0, dp(0), 0))
@@ -1093,6 +1082,9 @@ class AiMixScreen(BoxLayout):
     # ── 生命周期 ──
     def open(self, on_close=None):
         self.on_close = on_close or (lambda: None)
+        # 接管相机点击取样回调：AI 界面里点击画面 = 设定目标模板色
+        self._orig_pick = self.camera_view.on_color_picked
+        self.camera_view.on_color_picked = self._on_target_picked
         self._sampling_interval = Clock.schedule_interval(self._poll, 1.0 / 10)
 
     def request_close(self):
@@ -1103,52 +1095,136 @@ class AiMixScreen(BoxLayout):
         if self._sampling_interval is not None:
             Clock.unschedule(self._sampling_interval)
             self._sampling_interval = None
+        if getattr(self, "_orig_pick", None) is not None:
+            self.camera_view.on_color_picked = self._orig_pick
+            self._orig_pick = None
 
     def shutdown(self):
         self.close()
 
-    # ── 轮询（取中心色） ──
+    # ── 轮询（中心准星实时监测当前色） ──
     def _poll(self, dt):
         raw = self.camera_view.sample_at(None, None, radius=self._radius)
         if raw is None:
             return
-        corrected = self.wb.apply(raw)
-        current = self._surface_adjust(corrected)
+        base = self.wb.apply(raw) if self._mode == "correction" else raw
+        current = self._surface_adjust(base)
         self._current = current
         self.preview_block.set_color(current)
-        self.delta_lbl.text = "ΔE = --"
-
-        # 更新成分分析条
-        if self._comp_bars and len(self._comp_bars) >= 3:
-            c_r, c_g, c_b = current.rgb_normalized
-            yellow = (c_r + c_g) / 2 * 0.5
-            red = c_r * 0.4
-            black = (1 - c_r + 1 - c_g + 1 - c_b) / 3 * 0.3
-            total = yellow + red + black
-            if total > 0:
-                y_pct = yellow / total
-                r_pct = red / total
-                bl_pct = black / total
-                self._comp_bars[0][0].set_ratio(y_pct, None)
-                self._comp_bars[0][1].text = f"+{y_pct*100:.1f}%"
-                self._comp_bars[1][0].set_ratio(r_pct, None)
-                self._comp_bars[1][1].text = f"+{r_pct*100:.1f}%"
-                self._comp_bars[2][0].set_ratio(bl_pct, None)
-                self._comp_bars[2][1].text = f"+{bl_pct*100:.1f}%"
+        if self._target is not None:
+            try:
+                de = current.distance_de2000(self._target)
+                self.delta_lbl.text = f"ΔE {de:.1f}"
+            except Exception:
+                self.delta_lbl.text = "ΔE --"
+        else:
+            self.delta_lbl.text = "ΔE --"
 
         self._advice_tick += 1
         if self._advice_tick % 5 == 0:
             self._rebuild_advice(current)
 
+    def _on_target_picked(self, color):
+        """相机点击取样回调：点击位置颜色 = 目标模板色。"""
+        self._target = self._surface_adjust(self.wb.apply(color))
+        self.target_swatch.set_color(self._target)
+        self.tip.text = ""
+        self._rebuild_advice(self._current)
+        target = self._target
+
+        def _work():
+            # 三色网格搜索计算量较大，放后台线程算，算完回主线程渲染
+            try:
+                recipes = self.advisor.suggest_recipe(target, top_n=1)
+                r = recipes[0] if recipes else None
+            except Exception:
+                r = None
+            Clock.schedule_once(lambda dt: self._render_recipe(r), 0)
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _render_recipe(self, recipe):
+        """渲染目标色的基色配方条（recipe=None 时显示占位提示）。"""
+        self._comp_row.clear_widgets()
+        if recipe is None:
+            ph = Label(
+                text="选取目标后显示基色配方", size_hint_y=None, height=dp(20),
+                font_size=dp(10), color=DARK["sub"], halign="left",
+            )
+            ph.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
+            self._comp_row.add_widget(ph)
+            return
+        total = sum(c[2] for c in recipe.components) or 1.0
+        for name, color, pct in recipe.components[:4]:
+            item = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(22), spacing=dp(6))
+            dot = Label(text="●", size_hint=(None, 1), width=dp(16), font_size=dp(8),
+                        color=(*color.rgb_normalized, 1), valign="middle")
+            item.add_widget(dot)
+            item.add_widget(Label(text=name, size_hint=(None, 1), width=dp(52), font_size=dp(11),
+                                  color=DARK["text"], halign="left", valign="middle"))
+            bar = RatioBar(size_hint=(1, 1))
+            bar.set_ratio(pct / total, color)
+            item.add_widget(bar)
+            pct_lbl = Label(text=f"{pct:.0f}%", size_hint=(None, 1), width=dp(40),
+                            font_size=dp(10), color=DARK["sub"], valign="middle")
+            item.add_widget(pct_lbl)
+            self._comp_row.add_widget(item)
+
     def _rebuild_advice(self, current):
         self.advice_box.clear_widgets()
-        # 简单显示当前颜色信息
-        info = Label(
-            text=f"当前色: {current.hex}  |  Lab({current.lab[0]:.0f}, {current.lab[1]:+.0f}, {current.lab[2]:+.0f})",
-            size_hint_y=None, height=dp(18), font_size=dp(10), color=DARK["sub"], halign="left",
+        if current is not None:
+            info = Label(
+                text=f"当前色: {current.hex}  |  Lab({current.lab[0]:.0f}, {current.lab[1]:+.0f}, {current.lab[2]:+.0f})",
+                size_hint_y=None, height=dp(16), font_size=dp(10), color=DARK["sub"], halign="left",
+            )
+            info.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
+            self.advice_box.add_widget(info)
+        if self._target is None:
+            hint = Label(
+                text="点击画面选取目标色后，这里显示加料建议",
+                size_hint_y=None, height=dp(16), font_size=dp(10), color=DARK["gold"], halign="left",
+            )
+            hint.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
+            self.advice_box.add_widget(hint)
+            return
+        if current is None:
+            return
+        try:
+            de = current.distance_de2000(self._target)
+        except Exception:
+            de = current.distance(self._target)
+        if de < 2.0:
+            head_txt, head_col = "已达标：当前色与目标基本一致（ΔE<2）", (0.45, 0.8, 0.55, 1)
+        else:
+            nxt = self.advisor.suggest_next_pigment(current, self._target)
+            if nxt is not None:
+                p, w = nxt["pigment"], nxt["ratio"]
+                head_txt = f"加「{p.name}」约 {w*100:.0f}%  预计 ΔE {de:.1f}→{nxt['delta_e']:.1f}"
+                head_col = DARK["gold"]
+            else:
+                head_txt = "继续加料改善有限，建议停止并微调"
+                head_col = DARK["gold"]
+        head = Label(
+            text=head_txt, size_hint_y=None, height=dp(16), font_size=dp(10),
+            color=head_col, bold=True, halign="left",
         )
-        info.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
-        self.advice_box.add_widget(info)
+        head.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
+        self.advice_box.add_widget(head)
+        if de >= 2.0:
+            try:
+                for seg in self.advisor.suggest_adjustment(current, self._target).split("\n"):
+                    seg = seg.strip()
+                    if not seg or seg.startswith("调整建议"):
+                        continue
+                    l = Label(
+                        text=seg, size_hint_y=None, height=dp(14), font_size=dp(9),
+                        color=DARK["sub"], halign="left",
+                    )
+                    l.bind(size=lambda i, v: setattr(i, "text_size", (i.width, None)))
+                    self.advice_box.add_widget(l)
+                    break  # 面板空间有限，只显示第一条方向性建议
+            except Exception:
+                pass
 
 
 # ──────────────────────────────────────────────
@@ -1258,7 +1334,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.2.7"
+        self.title = "AI 调色助手 v1.3.0"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1286,7 +1362,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.2.7", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.3.0", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
@@ -1394,6 +1470,8 @@ class ColorAssistantApp(App):
         if self.camera_view.parent is not None:
             self.camera_view.parent.remove_widget(self.camera_view)
         self.camera_view.size_hint = (1, 1)
+        # FloatLayout 不重排无 pos_hint 的子控件，会保留 BoxLayout 里的旧坐标
+        self.camera_view.pos_hint = {"x": 0, "y": 0}
         self.mix_screen = AiMixScreen(camera_view=self.camera_view)
         self.mix_screen.size_hint = (1, 1)
         self.root.add_widget(self.mix_screen)
@@ -1406,6 +1484,7 @@ class ColorAssistantApp(App):
         self.mix_screen.shutdown()
         landscape = Window.width > Window.height and Window.width > 600
         self.camera_view.size_hint = (0.60, 1) if landscape else (1, 0.60)
+        self.camera_view.pos_hint = {}
         self.mix_screen.cam_area.remove_widget(self.camera_view)
         # 必须插到 children 末尾：竖向 BoxLayout 里 children[0] 排底部，
         # index=0 会把摄像头放到底部——布局颠倒的根因
