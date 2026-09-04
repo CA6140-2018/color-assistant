@@ -37,6 +37,7 @@ Thumbs.db
 artifact_APK.tar.gz
 tools/*
 !tools/gen_paint_library.py
+!tools/patch_p4a_diagnostics.py
 wsl_check.txt
 
 # Pigment config (generated at first run per device)

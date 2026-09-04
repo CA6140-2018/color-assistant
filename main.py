@@ -32,6 +32,8 @@ def _boot_marker(stage):
 
     每次写入立即 flush+fsync 落盘——原生层崩溃会丢掉 Python 缓冲区里
     未刷盘的内容，这就是之前 boot.txt/crash_log.txt 全是 0 字节的原因。
+    同时把每条标记以 PY 前缀追加进 java_boot.txt（与 Java 层标记同一文件，
+    回传一个文件即可看到从 Java 到 Python 的完整启动链）。
     """
     import time as _t
     line = "stage=%s %s\n" % (stage, _t.strftime("%Y-%m-%d %H:%M:%S"))
@@ -41,6 +43,14 @@ def _boot_marker(stage):
                 _f.write(line)
                 _f.flush()
                 os.fsync(_f.fileno())
+            try:
+                jp = os.path.join(os.path.dirname(p), "java_boot.txt")
+                with open(jp, "a", encoding="utf-8") as _jf:
+                    _jf.write("PY stage=%s %s\n" % (stage, _t.strftime("%Y-%m-%d %H:%M:%S")))
+                    _jf.flush()
+                    os.fsync(_jf.fileno())
+            except Exception:
+                pass
             return
         except Exception:
             continue
@@ -1249,7 +1259,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.2.4"
+        self.title = "AI 调色助手 v1.2.5"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
