@@ -1485,7 +1485,7 @@ class ColorAssistantApp(App):
             color=(0.15, 0.15, 0.15, 1), halign="left", valign="top",
         )
         content.bind(texture_size=lambda i, v: setattr(content, "height", v[1]))
-        content.bind(width=lambda i, v: setattr(content, "text_size", (v[0], None)))
+        content.bind(width=lambda i, v: setattr(content, "text_size", (float(v), None)))
         sv.add_widget(content)
         box.add_widget(sv)
         btn = Button(text="关闭应用", size_hint=(1, None), height=dp(46),
@@ -1510,7 +1510,7 @@ class ColorAssistantApp(App):
                 color=(0.15, 0.15, 0.15, 1), halign="left", valign="top",
             )
             content.bind(texture_size=lambda i, v: setattr(content, "height", v[1]))
-            content.bind(width=lambda i, v: setattr(content, "text_size", (v[0], None)))
+            content.bind(width=lambda i, v: setattr(content, "text_size", (float(v), None)))
             sv.add_widget(content)
             box.add_widget(sv)
             btn = Button(text="关闭", size_hint=(1, None), height=dp(44),
