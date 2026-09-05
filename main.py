@@ -474,8 +474,13 @@ class CameraView(FloatLayout):
         self._poll_cv2_probe(0)
 
     def _poll_cv2_probe(self, dt):
-        """主线程轮询探针结果：线程只填字段，主线程决定启用哪个后端。"""
+        """主线程轮询探针结果：线程只填字段，主线程决定启用哪个后端。
+
+        已决策（_use_cv2_android 非 None）后不再动作，否则 10s 兜底 _frame_guard
+        会把已激活的 OpenCV 后端误切成 Kivy，导致黑屏回归。"""
         if not getattr(self, "_cv2_probe_done", False):
+            return
+        if self._use_cv2_android is not None:
             return
         p = getattr(self, "_probe_poller", None)
         if p is not None:
