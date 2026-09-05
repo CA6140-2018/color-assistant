@@ -220,22 +220,23 @@ THEME = {
     "chroma": (1, 0.176, 0.573, 1),       # 饱和度粉色 #FF2D92
     "hue_color": (0.0, 0.478, 1, 1),      # 色相角蓝色
 }
-# 按参考图1：深色模式（专业调色面板）
+# AI 调色界面配色：全浅色明亮风（认同 iOS 浅色精髓）。
+# 摄像头取景框本身在 CameraView 里用硬编码深色，不受此处影响。
 DARK = {
-    "bg": (0.039, 0.086, 0.157, 1),      # 深海军蓝 #0a1628
-    "card": (0.102, 0.176, 0.290, 1),    # 卡片 #1a2d4a
-    "card_2": (0.165, 0.227, 0.333, 1),  # 次级 #2a3a55
-    "bar": (0.059, 0.122, 0.227, 1),     # 顶栏 #0f1f3a
-    "text": (1, 1, 1, 1),
-    "sub": (0.627, 0.690, 0.753, 1),     # #a0aec0
-    "gold": (0.961, 0.784, 0.259, 1),    # 金色 #f5c842
-    "accent": (0.290, 0.565, 0.886, 1),  # 蓝 #4a90e2
-    "orange": (0.941, 0.541, 0.365, 1),  # 橙 #f08a5d
-    "orange_dark": (0.908, 0.365, 0.243, 1),  # 深橙 #e85d3e
-    "yellow": (0.961, 0.784, 0.259, 1),  # 黄 #f5c842
-    "track_bg": (0.227, 0.290, 0.373, 1), # 进度条底 #3a4a5f
-    "selected": (0.961, 0.784, 0.259, 1), # 选中态黄
-    "unselected": (0.165, 0.227, 0.333, 1), # 未选中 #2a3a55
+    "bg": (0.949, 0.961, 0.973, 1),      # 浅色背景 #f2f5f8（微蓝）
+    "card": (1, 1, 1, 1),                # 白卡片
+    "card_2": (0.937, 0.961, 0.984, 1),  # 次级浅蓝 #eff6fb
+    "bar": (1, 1, 1, 1),                 # 顶栏纯白
+    "text": (0.086, 0.114, 0.157, 1),    # 深蓝黑文字 #162028
+    "sub": (0.463, 0.510, 0.576, 1),     # 中灰 #768a99
+    "gold": (0.8, 0.55, 0.0, 1),         # 深金 #cc8c00（浅底可读）
+    "accent": (0.0, 0.478, 1, 1),        # 系统蓝 #007AFF
+    "orange": (0.941, 0.50, 0.25, 1),    # 橙 #f08040
+    "orange_dark": (0.85, 0.36, 0.18, 1),# 深橙 #d95c2d
+    "yellow": (0.80, 0.58, 0.0, 1),      # 深黄 #cf9400
+    "track_bg": (0.878, 0.902, 0.929, 1),# 浅进度条底 #e0e6ed
+    "selected": (0.0, 0.478, 1, 1),      # 选中态蓝
+    "unselected": (0.898, 0.918, 0.945, 1), # 未选中浅灰 #e5eaf1
 }
 
 
@@ -949,11 +950,12 @@ class AiMixScreen(BoxLayout):
         self.add_widget(bar)
 
         # ── 摄像头区（点击画面任意位置 = 选取目标模板色） ──
+        # 取景框保持深色以便看清画面/准星；CameraView 自身为硬编码深色铺满
         self.cam_area = FloatLayout()
         self.cam_area.size_hint = (1, 0.55)
-        _bg(self.cam_area, DARK["bg"])
+        _bg(self.cam_area, (0.039, 0.086, 0.157, 1))  # 深色取景背景
         self.tip = Label(
-            text="点击画面任意位置，选取目标模板色", font_size=dp(13), color=DARK["sub"],
+            text="点击画面任意位置，选取目标模板色", font_size=dp(13), color=(0.75, 0.80, 0.86, 1),
             size_hint=(None, None), size=(dp(260), dp(26)),
             pos_hint={"center_x": 0.5, "y": 0.08},
         )
@@ -1007,7 +1009,7 @@ class AiMixScreen(BoxLayout):
         self._btn_correction.bind(on_release=lambda b: self._set_mode("correction"))
         self._btn_current = Button(
             text="当前色", size_hint=(1, 1), font_size=dp(12), background_normal="",
-            background_color=DARK["selected"], color=(0.1, 0.1, 0.1, 1), bold=True,
+            background_color=DARK["selected"], color=(1, 1, 1, 1), bold=True,
         )
         self._btn_current.bind(on_release=lambda b: self._set_mode("current"))
         btn_row.add_widget(self._btn_correction)
@@ -1054,9 +1056,9 @@ class AiMixScreen(BoxLayout):
     def _set_mode(self, mode):
         self._mode = mode
         self._btn_correction.background_color = DARK["selected"] if mode == "correction" else DARK["unselected"]
-        self._btn_correction.color = (0.1, 0.1, 0.1, 1) if mode == "correction" else DARK["text"]
+        self._btn_correction.color = (1, 1, 1, 1) if mode == "correction" else DARK["text"]
         self._btn_current.background_color = DARK["selected"] if mode == "current" else DARK["unselected"]
-        self._btn_current.color = (0.1, 0.1, 0.1, 1) if mode == "current" else DARK["text"]
+        self._btn_current.color = (1, 1, 1, 1) if mode == "current" else DARK["text"]
 
     # ── 干/潮切换 ──
     def _set_wet(self, wet):
@@ -1334,7 +1336,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.3.0"
+        self.title = "AI 调色助手 v1.3.1"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1362,7 +1364,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.3.0", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.3.1", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
