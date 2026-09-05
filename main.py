@@ -415,12 +415,14 @@ class CameraView(FloatLayout):
         self.add_widget(self.crosshair)
         self.bind(size=self._center_crosshair)
 
-        if HAS_CV2 and not IS_ANDROID:
-            self.capture = None
-            self._texture = None
-            self._camera_active = False
-        else:
-            self.kivy_camera = None
+        # 取帧后端统一初始化：Android 优先 OpenCV(CAP_ANDROID，系统相机正常说明该路通)，
+        # 全黑则回退 KivyCamera。_use_cv2_android: None=未决策, True=OpenCV, False=Kivy
+        self.kivy_camera = None
+        self.capture = None
+        self._texture = None
+        self._camera_active = False
+        self._use_cv2_android = None
+        self.cap_probe = None
 
     def _center_crosshair(self, *args):
         self.crosshair.center = self.center
@@ -452,12 +454,85 @@ class CameraView(FloatLayout):
                 self._camera_started = True
                 Clock.schedule_interval(self._update_cv2_frame, 1.0 / 30)
         else:
+            self._camera_started = True
+            # 先尝试 OpenCV(CAP_ANDROID) 取帧：小米8 上 Kivy 后端纹理常全黑，
+            # 而系统相机正常说明标准 Camera API 可取到帧。
+            if self._use_cv2_android is not None:
+                # 已有决断：cv2 已激活由 _update_cv2_frame 接续；Kivy 已排程
+                return
+            from threading import Thread
+            Thread(target=self._probe_cv2_android, args=(camera_index,), daemon=True).start()
+            Clock.schedule_once(self._frame_guard, 10.0)
+
+    def _frame_guard(self, dt):
+        """10s 兜底：若 cv2 体检仍未决断（线程异常），回退 Kivy。"""
+        if self._use_cv2_android is None:
+            self._use_cv2_android = False
             if self.kivy_camera is None and not getattr(self, "_cam_sched", False):
                 self._cam_sched = True
                 Clock.schedule_once(self._init_android_camera, 0)
-            self._camera_started = True
-            # 首帧超时兜底：10 秒后如果还没收到纹理，尝试重新初始化
-            Clock.schedule_once(self._frame_timeout, 10.0)
+        elif self._use_cv2_android is False and self.kivy_camera is None:
+            if not getattr(self, "_cam_sched", False):
+                self._cam_sched = True
+                Clock.schedule_once(self._init_android_camera, 0)
+
+    def _probe_cv2_android(self, camera_index):
+        """后台线程：体检 OpenCV 各后端，选出首帧非黑的作取帧源。"""
+        import cv2 as _cv2
+        attempts = []
+        attempts.append(("default", lambda i=camera_index: _cv2.VideoCapture(i)))
+        _ad = getattr(_cv2, "CAP_ANDROID", None)
+        if _ad is not None:
+            attempts.append(("cap_android", lambda i=camera_index, b=_ad: _cv2.VideoCapture(i, b)))
+        chosen = None
+        for name, mk in attempts:
+            try:
+                cap = mk()
+            except Exception:
+                cap = None
+            if cap is None or not cap.isOpened():
+                if cap is not None:
+                    cap.release()
+                continue
+            good = False
+            for _ in range(12):
+                try:
+                    ok, fr = cap.read()
+                    if ok and fr is not None and fr.size:
+                        m = int(fr.mean())
+                        crash_log.write_crash("[camera] cv2-android[%s] mean=%d\n" % (name, m))
+                        if m >= 10:
+                            good = True
+                            break
+                except Exception:
+                    break
+            if good:
+                chosen = (name, cap)
+                break
+            cap.release()
+        if chosen is None:
+            crash_log.write_crash("[camera] cv2-android all black, fallback kivy\n")
+            self._use_cv2_android = False
+            self._frame_guard(0)
+            return
+        name, cap = chosen
+        crash_log.write_crash("[camera] cv2-android chosen=%s\n" % name)
+        self.cap_probe = cap
+        Clock.schedule_once(self._activate_cv2_android, 0)
+
+    def _activate_cv2_android(self, dt):
+        """主线程：把体检选中的 OpenCV 采集器正式激活。"""
+        cap = self.cap_probe
+        self.cap_probe = None
+        if cap is None:
+            self._use_cv2_android = False
+            self._frame_guard(0)
+            return
+        self.capture = cap
+        self._use_cv2_android = True
+        self._camera_active = True
+        Clock.schedule_interval(self._update_cv2_frame, 1.0 / 30)
+        crash_log.write_crash("[camera] cv2-android active\n")
 
     def _frame_timeout(self, dt):
         if self._placeholder.parent is None:
@@ -512,9 +587,19 @@ class CameraView(FloatLayout):
                 self.capture.release()
                 self.capture = None
         else:
-            Clock.unschedule(self._update_kivy_frame)
-            if self.kivy_camera is not None:
-                self.kivy_camera.play = False
+            if self._use_cv2_android:
+                Clock.unschedule(self._update_cv2_frame)
+                if self.capture is not None:
+                    try:
+                        self.capture.release()
+                    except Exception:
+                        pass
+                    self.capture = None
+                self._use_cv2_android = None
+            else:
+                Clock.unschedule(self._update_kivy_frame)
+                if self.kivy_camera is not None:
+                    self.kivy_camera.play = False
         self._camera_started = False
 
     # ── 帧更新 ──
@@ -1408,7 +1493,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.3.1"
+        self.title = "AI 调色助手 v1.3.2"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1436,7 +1521,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.3.1", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.3.2", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
