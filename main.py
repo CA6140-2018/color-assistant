@@ -456,83 +456,109 @@ class CameraView(FloatLayout):
         else:
             self._camera_started = True
             # 先尝试 OpenCV(CAP_ANDROID) 取帧：小米8 上 Kivy 后端纹理常全黑，
-            # 而系统相机正常说明标准 Camera API 可取到帧。
+            # 而系统相机正常说明标准 Camera API 可取到帧。探针在线程里只算不碰 UI。
             if self._use_cv2_android is not None:
-                # 已有决断：cv2 已激活由 _update_cv2_frame 接续；Kivy 已排程
                 return
+            self._cv2_probe_done = False
+            self._cv2_probe_cap = None
             from threading import Thread
             Thread(target=self._probe_cv2_android, args=(camera_index,), daemon=True).start()
+            self._probe_poller = Clock.schedule_interval(self._poll_cv2_probe, 0.3)
             Clock.schedule_once(self._frame_guard, 10.0)
 
     def _frame_guard(self, dt):
-        """10s 兜底：若 cv2 体检仍未决断（线程异常），回退 Kivy。"""
-        if self._use_cv2_android is None:
+        """10s 兜底：若 cv2 探针仍未决断（线程异常），回退 Kivy。"""
+        if self._use_cv2_android is None and not getattr(self, "_cv2_probe_done", False):
+            self._cv2_probe_done = True
+            self._cv2_probe_cap = None
+        self._poll_cv2_probe(0)
+
+    def _poll_cv2_probe(self, dt):
+        """主线程轮询探针结果：线程只填字段，主线程决定启用哪个后端。"""
+        if not getattr(self, "_cv2_probe_done", False):
+            return
+        p = getattr(self, "_probe_poller", None)
+        if p is not None:
+            Clock.unschedule(p)
+            self._probe_poller = None
+        cap = getattr(self, "_cv2_probe_cap", None)
+        self._cv2_probe_cap = None
+        if cap is not None:
+            self.capture = cap
+            self._use_cv2_android = True
+            self._camera_active = True
+            Clock.schedule_interval(self._update_cv2_frame, 1.0 / 30)
+            crash_log.write_crash("[camera] cv2-android active\n")
+        else:
             self._use_cv2_android = False
             if self.kivy_camera is None and not getattr(self, "_cam_sched", False):
                 self._cam_sched = True
                 Clock.schedule_once(self._init_android_camera, 0)
-        elif self._use_cv2_android is False and self.kivy_camera is None:
-            if not getattr(self, "_cam_sched", False):
-                self._cam_sched = True
-                Clock.schedule_once(self._init_android_camera, 0)
+            else:
+                self._init_android_camera(0)
 
     def _probe_cv2_android(self, camera_index):
-        """后台线程：体检 OpenCV 各后端，选出首帧非黑的作取帧源。"""
-        import cv2 as _cv2
-        attempts = []
-        attempts.append(("default", lambda i=camera_index: _cv2.VideoCapture(i)))
-        _ad = getattr(_cv2, "CAP_ANDROID", None)
-        if _ad is not None:
-            attempts.append(("cap_android", lambda i=camera_index, b=_ad: _cv2.VideoCapture(i, b)))
-        chosen = None
-        for name, mk in attempts:
-            try:
-                cap = mk()
-            except Exception:
-                cap = None
-            if cap is None or not cap.isOpened():
-                if cap is not None:
-                    cap.release()
-                continue
-            good = False
-            for _ in range(12):
-                try:
-                    ok, fr = cap.read()
-                    if ok and fr is not None and fr.size:
-                        m = int(fr.mean())
-                        crash_log.write_crash("[camera] cv2-android[%s] mean=%d\n" % (name, m))
-                        if m >= 10:
-                            good = True
-                            break
-                except Exception:
-                    break
-            if good:
-                chosen = (name, cap)
-                break
-            cap.release()
-        if chosen is None:
-            crash_log.write_crash("[camera] cv2-android all black, fallback kivy\n")
-            self._use_cv2_android = False
-            self._frame_guard(0)
-            return
-        name, cap = chosen
-        crash_log.write_crash("[camera] cv2-android chosen=%s\n" % name)
-        self.cap_probe = cap
-        Clock.schedule_once(self._activate_cv2_android, 0)
+        """后台线程：体检 OpenCV 各后端，选出首帧非黑的作取帧源。
 
-    def _activate_cv2_android(self, dt):
-        """主线程：把体检选中的 OpenCV 采集器正式激活。"""
-        cap = self.cap_probe
-        self.cap_probe = None
-        if cap is None:
-            self._use_cv2_android = False
-            self._frame_guard(0)
+        只读写自身字段与写日志，严禁从这里调用 Kivy Clock（非主线程）。"""
+        import traceback as _tb
+        try:
+            import cv2 as _cv2
+        except Exception as e:
+            crash_log.write_crash("[camera] probe import-cv2 FAILED %r\n" % (e,))
+            self._cv2_probe_cap = None
+            self._cv2_probe_done = True
             return
-        self.capture = cap
-        self._use_cv2_android = True
-        self._camera_active = True
-        Clock.schedule_interval(self._update_cv2_frame, 1.0 / 30)
-        crash_log.write_crash("[camera] cv2-android active\n")
+        try:
+            attempts = []
+            attempts.append(("default", lambda i=camera_index: _cv2.VideoCapture(i)))
+            _ad = getattr(_cv2, "CAP_ANDROID", None)
+            if _ad is not None:
+                attempts.append(("cap_android", lambda i=camera_index, b=_ad: _cv2.VideoCapture(i, b)))
+            chose = None
+            for name, mk in attempts:
+                cap = None
+                try:
+                    try:
+                        cap = mk()
+                    except Exception as e:
+                        crash_log.write_crash("[camera] probe[%s] open EXC %r\n%s\n" % (name, e, _tb.format_exc()))
+                        continue
+                    opened = cap is not None and cap.isOpened()
+                    crash_log.write_crash("[camera] probe[%s] open=%s\n" % (name, opened))
+                    if not opened:
+                        if cap is not None:
+                            cap.release()
+                        continue
+                    for _ in range(12):
+                        try:
+                            ok, fr = cap.read()
+                        except Exception as e2:
+                            crash_log.write_crash("[camera] probe[%s] read EXC %r\n" % (name, e2))
+                            break
+                        if ok and fr is not None and fr.size:
+                            m = int(fr.mean())
+                            crash_log.write_crash("[camera] probe[%s] mean=%d\n" % (name, m))
+                            if m >= 10:
+                                chose = cap
+                                break
+                    if chose is not None:
+                        break
+                    crash_log.write_crash("[camera] probe[%s] no-clear-frame, release\n" % name)
+                    cap.release()
+                except Exception as e:
+                    crash_log.write_crash("[camera] probe[%s] EXC %s\n%s\n" % (name, e, _tb.format_exc()))
+                    if cap is not None:
+                        try:
+                            cap.release()
+                        except Exception:
+                            pass
+        except Exception as e:
+            crash_log.write_crash("[camera] probe FATAL %s\n%s\n" % (e, _tb.format_exc()))
+        self._cv2_probe_cap = chose if "chose" in dir() else None
+        crash_log.write_crash("[camera] probe DONE chose=%s\n"
+                              % ("cv2" if self._cv2_probe_cap is not None else "none-kivy"))
+        self._cv2_probe_done = True
 
     def _frame_timeout(self, dt):
         if self._placeholder.parent is None:

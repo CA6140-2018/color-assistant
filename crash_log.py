@@ -154,8 +154,14 @@ def install() -> str:
         import threading
 
         def _thread_hook(args):
-            tb = "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_tb))
-            write_crash("\n----- THREAD CRASH (%s) -----\n%s\n" % (args.thread.name, tb))
+            # 注意属性名是 exc_traceback（不是 exc_tb）；用 getattr 兼容
+            tb = "".join(traceback.format_exception(
+                getattr(args, "exc_type", None),
+                getattr(args, "exc_value", None),
+                getattr(args, "exc_traceback", None),
+            ))
+            write_crash("\n----- THREAD CRASH (%s) -----\n%s\n"
+                        % (getattr(args, "thread", None).name if getattr(args, "thread", None) else "?", tb))
 
         threading.excepthook = _thread_hook
     except Exception:
