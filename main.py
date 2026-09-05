@@ -481,12 +481,20 @@ class CameraView(FloatLayout):
             from kivy.uix.camera import Camera as KivyCamera
             c = KivyCamera(play=True, index=0, resolution=(640, 480))
             c.size_hint = (None, None)
-            c.size = (0, 0)
-            c.opacity = 0
+            # 尺寸用实际预览分辨率而非 0×0：某些机型把预览 Surface 设成 0×0 时
+            # 相机后端不会出帧（纹理一直为黑）。仍放屏外 + 透明，不参与显示，
+            # 画面统一由 tex_view 旋转后展示，避免与相机自带渲染重叠。
+            c.size = (640, 480)
             c.pos = (-2000, -2000)
+            c.opacity = 0
             self.add_widget(c)
             self.kivy_camera = c
-            crash_log.write_crash("[camera] KivyCamera created ok (hidden capture)\n")
+            self._black_watch_on = False
+            self._black_streak = 0
+            self._black_restarts = 0
+            self._diag_frames = 0
+            self._init_black_watch()
+            crash_log.write_crash("[camera] KivyCamera created ok (prewarmed size, hidden)\n")
         except Exception as e:
             import traceback as _tb
             crash_log.write_crash("[camera] KivyCamera create FAILED: %s\n%s\n" % (e, _tb.format_exc()))
@@ -546,8 +554,72 @@ class CameraView(FloatLayout):
             pixels = tex.pixels
             if pixels:
                 self._frame = Frame(pixels, w, h, src="rgba_flip")
+                if getattr(self, "_diag_frames", 0) == 0:
+                    self._diag_frames = 1
+                    try:
+                        rp = pixels[0::4]
+                        gp = pixels[1::4]
+                        bp = pixels[2::4]
+                        n = len(rp)
+                        crash_log.write_crash(
+                            "[camera] frame1 tex=%dx%d meanRGB=(%d,%d,%d)\n" % (
+                                w, h, sum(rp) // n, sum(gp) // n, sum(bp) // n,
+                            )
+                        )
+                    except Exception:
+                        pass
         except Exception:
             pass
+
+    def _init_black_watch(self):
+        if getattr(self, "_black_watch_on", False):
+            return
+        self._black_watch_on = True
+        Clock.schedule_interval(self._black_watch_tick, 2.0)
+
+    def _black_watch_tick(self, dt):
+        cam = getattr(self, "kivy_camera", None)
+        if cam is None or cam.texture is None:
+            return
+        tex = cam.texture
+        w, h = tex.size
+        if w <= 0 or h <= 0:
+            return
+        try:
+            px = tex.pixels
+            mean_r = sum(px[0::4]) // max(1, w * h)
+        except Exception:
+            return
+        if mean_r >= 16:
+            if self._black_streak:
+                self._black_streak = 0
+                crash_log.write_crash("[camera] black-watch recovered (meanR=%d)\n" % mean_r)
+            return
+        self._black_streak += 1
+        crash_log.write_crash("[camera] black-watch streak=%d meanR=%d restarts=%d\n" %
+                              (self._black_streak, mean_r, self._black_restarts))
+        if self._black_streak >= 3:
+            if self._black_restarts >= 2:
+                Clock.unschedule(self._black_watch_tick)
+                crash_log.write_crash("[camera] black-watch give up after restarts\n")
+                return
+            self._black_streak = 0
+            self._black_restarts += 1
+            crash_log.write_crash("[camera] black detected, restarting camera (#%d)\n" % self._black_restarts)
+            self._restart_kivy_camera("black")
+
+    def _restart_kivy_camera(self, reason):
+        if getattr(self, "kivy_camera", None) is not None:
+            try:
+                self.kivy_camera.play = False
+            except Exception:
+                pass
+            self.remove_widget(self.kivy_camera)
+            self.kivy_camera = None
+        self._camera_started = False
+        self._cam_sched = False
+        Clock.schedule_once(self._init_android_camera, 0)
+        self._camera_started = True
 
     def _on_first_frame(self):
         if self._placeholder.parent is not None and self._placeholder.opacity > 0.99:
