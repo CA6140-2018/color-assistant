@@ -1475,7 +1475,8 @@ class ColorAssistantApp(App):
         self.mix_screen = AiMixScreen(camera_view=self.camera_view)
         self.mix_screen.size_hint = (1, 1)
         self.root.add_widget(self.mix_screen)
-        self.mix_screen.cam_area.add_widget(self.camera_view)
+        # index=0：摄像头垫底，让上层的准星和"点击选取目标"提示可见
+        self.mix_screen.cam_area.add_widget(self.camera_view, index=0)
         self.mix_screen.open(on_close=self._on_close_mix)
 
     def _on_close_mix(self):
