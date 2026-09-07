@@ -16,11 +16,13 @@ source.include_exts = py,png,jpg,jpeg,kv,atlas,otf,ttf,json,txt
 source.exclude_dirs = __pycache__, .git, build, dist, bin
 source.exclude_patterns = requirements.txt, README.md, *.spec.bak
 
-# 依赖（不包含 opencv 与 numpy，Android 用 Kivy 原生 Camera + 纯 Python 取色，缩短交叉编译）
+# 依赖：Kivy 原生 Camera 在小米8/MIUI 上是黑屏（SDL 旧 Camera API 问题），
+# 必须引入 opencv 用 Camera2（CAP_ANDROID）实时取帧。opencv 会显著增大
+# APK 体积并拉长交叉编译时间，但这是当前唯一能出画面的路径。
 # filetype 是纯 Python 包，Kivy 的 kivy.core.image 启动时依赖它；
 # 我们把 p4a 的 kivy recipe 里 python_depends 清空了（避免 charset-normalizer 编译扩展问题），
 # 所以必须在此显式补上 filetype，否则运行时 No module named 'filetype' 直接闪退。
-requirements = python3,kivy==2.3.1,filetype==1.2.0
+requirements = python3,kivy==2.3.1,filetype==1.2.0,opencv
 
 # Android 设置
 android.permissions = CAMERA, WRITE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE
