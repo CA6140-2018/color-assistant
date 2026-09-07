@@ -606,13 +606,29 @@ class Frame:
         return (self.height, self.width, 3)
 
     def bgr_at(self, x: int, y: int) -> Tuple[int, int, int]:
+        # 防御：坐标钳制到帧范围内，且校验索引不超出 data 实际长度。
+        # 小米8 上 cv2 个别帧 read 不完整(data 长度 < width*height*3)，
+        # 边缘取色会 IndexError(733de48 崩)——钳制+长度校验双保险，宁可取错色也不崩。
         d = self.data
+        n = len(d)
+        if x < 0:
+            x = 0
+        elif x >= self.width:
+            x = self.width - 1
+        if y < 0:
+            y = 0
+        elif y >= self.height:
+            y = self.height - 1
         if self.src == "bgr":
             i = (y * self.width + x) * 3
+            if i < 0 or i + 2 >= n:
+                return (0, 0, 0)
             return (d[i], d[i + 1], d[i + 2])
         # rgba_flip：Kivy 纹理行自下而上，且为 RGBA 顺序
         sy = self.height - 1 - y
         i = (sy * self.width + x) * 4
+        if i < 0 or i + 2 >= n:
+            return (0, 0, 0)
         r, g, b = d[i], d[i + 1], d[i + 2]
         return (b, g, r)
 

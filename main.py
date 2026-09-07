@@ -758,6 +758,20 @@ class CameraView(FloatLayout):
         if self._frame is None:
             return None
         frame_h, frame_w = self._frame.shape[:2]
+        # 一次性诊断：验证 data 长度与宽高是否匹配（查 IndexError 根因）
+        if not getattr(self, "_frame_dim_logged", False):
+            self._frame_dim_logged = True
+            try:
+                bpp = 3 if self._frame.src == "bgr" else 4
+                crash_log.write_crash(
+                    "[frame] w=%d h=%d len=%d expect=%d src=%s rot=%s\n" % (
+                        self._frame.width, self._frame.height, len(self._frame.data),
+                        self._frame.width * self._frame.height * bpp,
+                        self._frame.src, self._rotation,
+                    )
+                )
+            except Exception:
+                pass
         if self.width <= 0 or self.height <= 0:
             return None
         if lx is None:
@@ -1526,7 +1540,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.3.3"
+        self.title = "AI 调色助手 v1.3.4"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1554,7 +1568,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.3.3", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.3.4", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
