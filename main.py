@@ -177,15 +177,12 @@ except Exception:
     pass
 
 _cjk_font = _find_cjk_font()
-if _SAFE_MODE:
-    # safe-mode：字体注册是疑似原生崩溃点之一，本次跳过（中文将显示为方框），
-    # 先换取应用能启动、诊断日志能落盘
-    _boot_marker("5-font-skipped-safe-mode")
-else:
-    if _cjk_font:
-        from kivy.core.text import LabelBase
-        LabelBase.register("Roboto", _cjk_font, _cjk_font, _cjk_font, _cjk_font)
-    _boot_marker("5-font-registered:%s" % (_cjk_font or "none"))
+# 字体始终注册，不被 safe-mode 跳过。真闪退根因是 line1513 的 width lambda
+#（float not subscriptable），并非字体；跳过字体只会让界面乱码/变方框。
+if _cjk_font:
+    from kivy.core.text import LabelBase
+    LabelBase.register("Roboto", _cjk_font, _cjk_font, _cjk_font, _cjk_font)
+_boot_marker("5-font-registered:%s" % (_cjk_font or "none"))
 
 from color_engine import (
     Color,
