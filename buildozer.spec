@@ -5,8 +5,9 @@ title = AI调色助手
 package.name = colorassistant
 package.domain = org.colorassistant
 
-# 版本
-version = 1.3.2
+# 版本：注意！只要有功能改动，必须同步提升此版本号（小改 +0.0.1，大改 +0.1）。
+# 否则 tag 重复会导致用户分不清 APK。上次 2fbcd29 漏升版本被用户批评过，勿再犯。
+version = 1.3.3
 
 # 源代码目录
 source.dir = .

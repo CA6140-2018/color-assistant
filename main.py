@@ -632,27 +632,32 @@ class CameraView(FloatLayout):
 
     # ── 帧更新 ──
     def _update_cv2_frame(self, dt):
-        if not self._camera_active or self.capture is None:
-            return
-        ret, frame = self.capture.read()
-        if not ret:
-            return
-        import numpy as np
-        self._frame = Frame(frame.tobytes(), frame.shape[1], frame.shape[0], src="bgr")
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frame_rgb = np.rot90(frame_rgb)
-        frame_rgb = np.flipud(frame_rgb)
-        buf = frame_rgb.tobytes()
-        if (
-            self._texture is None
-            or self._texture.size[0] != frame_rgb.shape[1]
-            or self._texture.size[1] != frame_rgb.shape[0]
-        ):
-            self._texture = Texture.create(size=(frame_rgb.shape[1], frame_rgb.shape[0]), colorfmt="rgb")
-            self._texture.flip_horizontal = True
-        self._texture.blit_buffer(buf, colorfmt="rgb")
-        self.tex_view.set_texture(self._texture)
-        self._on_first_frame()
+        try:
+            if not self._camera_active or self.capture is None:
+                return
+            ret, frame = self.capture.read()
+            if not ret:
+                return
+            import numpy as np
+            self._frame = Frame(frame.tobytes(), frame.shape[1], frame.shape[0], src="bgr")
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame_rgb = np.rot90(frame_rgb)
+            frame_rgb = np.flipud(frame_rgb)
+            buf = frame_rgb.tobytes()
+            if (
+                self._texture is None
+                or self._texture.size[0] != frame_rgb.shape[1]
+                or self._texture.size[1] != frame_rgb.shape[0]
+            ):
+                self._texture = Texture.create(size=(frame_rgb.shape[1], frame_rgb.shape[0]), colorfmt="rgb")
+            # flip_horizontal 是只读属性不能赋值(2fbcd29 在这崩)
+            # 画面方向已由上方 rot90+flipud 校正，如需镜像改用 tex_coords 或调整 np 变换
+            self._texture.blit_buffer(buf, colorfmt="rgb")
+            self.tex_view.set_texture(self._texture)
+            self._on_first_frame()
+        except Exception:
+            # 相机帧处理不容许让整个应用退出：出错仅记异常，避免反复崩
+            traceback.print_exc()
 
     def _update_kivy_frame(self, dt):
         if getattr(self, "kivy_camera", None) is None:
@@ -1521,7 +1526,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.3.2"
+        self.title = "AI 调色助手 v1.3.3"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1549,7 +1554,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.3.2", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.3.3", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
