@@ -91,16 +91,28 @@ class Color:
 
     @classmethod
     def from_hex(cls, hex_str: str) -> "Color":
-        hex_str = hex_str.lstrip("#")
-        r = int(hex_str[0:2], 16)
-        g = int(hex_str[2:4], 16)
-        b = int(hex_str[4:6], 16)
+        hex_str = hex_str.lstrip("#").strip()
+        # 支持 3 位简写（如 #FFF → #FFFFFF）
+        if len(hex_str) == 3:
+            hex_str = "".join(c * 2 for c in hex_str)
+        if len(hex_str) != 6:
+            raise ValueError(f"Invalid hex color: #{hex_str}, expected 3 or 6 hex digits")
+        try:
+            r = int(hex_str[0:2], 16)
+            g = int(hex_str[2:4], 16)
+            b = int(hex_str[4:6], 16)
+        except ValueError as e:
+            raise ValueError(f"Invalid hex color: #{hex_str}, not valid hex digits") from e
         return cls(r, g, b)
 
     @classmethod
     def from_hsl(cls, h: float, s: float, l: float) -> "Color":
         r, g, b = colorsys.hls_to_rgb(h / 360, l / 100, s / 100)
-        return cls(int(r * 255), int(g * 255), int(b * 255))
+        return cls(
+            max(0, min(255, int(round(r * 255)))),
+            max(0, min(255, int(round(g * 255)))),
+            max(0, min(255, int(round(b * 255)))),
+        )
 
     @classmethod
     def from_lab(cls, L: float, a: float, b: float) -> "Color":
@@ -208,7 +220,9 @@ class Color:
     def distance(self, other: "Color", method: str = "de2000") -> float:
         if method == "lab":
             return self.distance_lab(other)
-        return self.distance_de2000(other)
+        if method == "de2000":
+            return self.distance_de2000(other)
+        raise ValueError(f"Unknown distance method: {method!r}, expected 'lab' or 'de2000'")
 
     def __repr__(self):
         return f"Color(r={self.r}, g={self.g}, b={self.b}, hex={self.hex})"
@@ -280,12 +294,26 @@ def _load_pigments() -> List[Pigment]:
                 with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 pigments = []
-                for item in data:
-                    r, g, b = item["rgb"]
+                if not isinstance(data, list):
+                    continue
+                for idx, item in enumerate(data):
+                    if not isinstance(item, dict):
+                        continue
+                    if "name" not in item or "rgb" not in item:
+                        continue
+                    rgb = item["rgb"]
+                    if not isinstance(rgb, (list, tuple)) or len(rgb) != 3:
+                        continue
+                    try:
+                        r, g, b = int(rgb[0]), int(rgb[1]), int(rgb[2])
+                    except (TypeError, ValueError):
+                        continue
+                    if not all(0 <= v <= 255 for v in (r, g, b)):
+                        continue
                     pigments.append(
                         Pigment(
                             name=str(item["name"]),
-                            color=Color(int(r), int(g), int(b)),
+                            color=Color(r, g, b),
                             description=str(item.get("description", "")),
                         )
                     )
@@ -572,10 +600,26 @@ class RecipeFinder:
                                 ))
 
         results.sort(key=lambda r: r.delta_e)
-        # 去重：避免返回过多相似的配方
+        # 去重：按颜料成分去重（颜料种类相同 + 比例差异 < 阈值 视为同一配方的微小变体）
+        # 之前按 delta_e 去重是错的——不同配方可能色差接近，导致用户看到的方案都差不多
         unique: List[Recipe] = []
         for r in results:
-            if all(abs(r.delta_e - u.delta_e) > 0.5 for u in unique):
+            is_dup = False
+            r_names = sorted(c[0] for c in r.components)
+            for u in unique:
+                u_names = sorted(c[0] for c in u.components)
+                if r_names != u_names:
+                    continue  # 颜料种类不同，不是重复
+                # 颜料种类相同，检查比例差异（按相同颜料名对齐比较）
+                r_map = {c[0]: c[2] for c in r.components}
+                u_map = {c[0]: c[2] for c in u.components}
+                max_diff = 0.0
+                for name in r_names:
+                    max_diff = max(max_diff, abs(r_map[name] - u_map[name]))
+                if max_diff < 5.0:  # 比例差异小于 5% 视为同一配方变体
+                    is_dup = True
+                    break
+            if not is_dup:
                 unique.append(r)
             if len(unique) >= top_n:
                 break
@@ -664,10 +708,10 @@ def extract_dominant_color(image: Frame, k: int = 3) -> Color:
 
     k = max(1, min(k, n))
 
-    # 简易 K-means
+    # 简易 K-means（用独立 Random 实例，不污染全局随机种子）
     import random
-    random.seed(42)
-    centers = random.sample(samples, k)
+    rng = random.Random(42)
+    centers = rng.sample(samples, k)
 
     clusters = [[] for _ in range(k)]
     for _ in range(10):
@@ -721,9 +765,9 @@ def average_color_region(image: Frame, center: Tuple[int, int], radius: int = 10
     if y1 <= y0 or x1 <= x0:
         return Color(128, 128, 128)
 
-    # 圆形掩码（以区域中心为圆心）
-    crx = x0 + (x1 - x0) / 2.0
-    cry = y0 + (y1 - y0) / 2.0
+    # 圆形掩码（以用户指定的 center 为圆心，而非裁剪区域中心
+    # —— 靠近边缘时裁剪区域会被钳制，圆心偏移会导致取色位置与点击不符）
+    crx, cry = cx, cy
     sb = sg = sr = 0
     count = 0
     for yy in range(y0, y1):
@@ -790,6 +834,8 @@ class WhiteBalance:
         measured: 相机对着标准卡测得的颜色（需先做灰卡区域平均）
         nominal: 该标准卡的期望 RGB；默认中性灰(128,128,128)
         """
+        if measured is None:
+            return None
         nom = list(nominal or self.NOMINAL)
         mr, mg, mb = measured.rgb
         # 避免除以0

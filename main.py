@@ -59,8 +59,9 @@ def _boot_marker(stage):
 
 def _boot_flag_file():
     """safe-mode 标志文件路径（与 boot.txt 同目录）。"""
-    for p in _boot_paths():
-        return os.path.join(os.path.dirname(p), "boot_incomplete.flag")
+    paths = _boot_paths()
+    if paths:
+        return os.path.join(os.path.dirname(paths[0]), "boot_incomplete.flag")
     return "boot_incomplete.flag"
 
 
@@ -159,6 +160,7 @@ from kivy.uix.label import Label
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.slider import Slider
 from kivy.uix.widget import Widget
+import numpy as np
 _boot_marker("4-kivy-imports-done")
 
 # Kivy 事件循环内的异常（时钟回调/触摸事件）默认不触发 sys.excepthook，
@@ -419,7 +421,6 @@ class CameraView(FloatLayout):
         self._texture = None
         self._camera_active = False
         self._use_cv2_android = None
-        self.cap_probe = None
 
     def _center_crosshair(self, *args):
         self.crosshair.center = self.center
@@ -504,6 +505,7 @@ class CameraView(FloatLayout):
 
         只读写自身字段与写日志，严禁从这里调用 Kivy Clock（非主线程）。"""
         import traceback as _tb
+        chose = None
         try:
             import cv2 as _cv2
         except Exception as e:
@@ -559,7 +561,7 @@ class CameraView(FloatLayout):
                             pass
         except Exception as e:
             crash_log.write_crash("[camera] probe FATAL %s\n%s\n" % (e, _tb.format_exc()))
-        self._cv2_probe_cap = chose if "chose" in dir() else None
+        self._cv2_probe_cap = chose
         crash_log.write_crash("[camera] probe DONE chose=%s\n"
                               % ("cv2" if self._cv2_probe_cap is not None else "none-kivy"))
         self._cv2_probe_done = True
@@ -568,6 +570,8 @@ class CameraView(FloatLayout):
         if self._placeholder.parent is None:
             return  # 已收到首帧，正常
         crash_log.write_crash("[camera] frame timeout: no texture after 10s, restarting\n")
+        # 先取消旧的帧更新定时器，避免泄漏
+        Clock.unschedule(self._update_kivy_frame)
         if self.kivy_camera is not None:
             self.kivy_camera.play = False
             self.remove_widget(self.kivy_camera)
@@ -626,10 +630,22 @@ class CameraView(FloatLayout):
                         pass
                     self.capture = None
                 self._use_cv2_android = None
+                self._camera_active = False
+                # 取消探针轮询定时器
+                p = getattr(self, "_probe_poller", None)
+                if p is not None:
+                    Clock.unschedule(p)
+                    self._probe_poller = None
             else:
                 Clock.unschedule(self._update_kivy_frame)
+                # 取消黑屏检测定时器
+                if getattr(self, "_black_watch_on", False):
+                    Clock.unschedule(self._black_watch_tick)
+                    self._black_watch_on = False
                 if self.kivy_camera is not None:
                     self.kivy_camera.play = False
+                    self.remove_widget(self.kivy_camera)
+                    self.kivy_camera = None
         self._camera_started = False
 
     # ── 帧更新 ──
@@ -639,8 +655,13 @@ class CameraView(FloatLayout):
                 return
             ret, frame = self.capture.read()
             if not ret or frame is None or frame.size == 0:
+                self._cv2_error_streak = getattr(self, "_cv2_error_streak", 0) + 1
+                if self._cv2_error_streak >= 30:
+                    crash_log.write_crash("[camera] cv2 read failed 30x, restarting capture\n")
+                    self._cv2_error_streak = 0
+                    self._restart_cv2_capture()
                 return
-            import numpy as np
+            self._cv2_error_streak = 0
             # ── 帧格式归一化：Android 上 OpenCV 可能返回单通道（YUV 的 Y 分量），
             #    必须显式转 BGR 才能正确显示和取色。之前 v1.3.4 黑屏的根因在此。
             if len(frame.shape) == 2:
@@ -675,7 +696,33 @@ class CameraView(FloatLayout):
             self._on_first_frame()
         except Exception:
             # 相机帧处理不容许让整个应用退出：出错仅记异常，避免反复崩
+            # 但连续失败过多时尝试重启 capture
             traceback.print_exc()
+            self._cv2_frame_exc = getattr(self, "_cv2_frame_exc", 0) + 1
+            if self._cv2_frame_exc >= 30:
+                self._cv2_frame_exc = 0
+                crash_log.write_crash("[camera] cv2 frame exc 30x, restarting capture\n")
+                self._restart_cv2_capture()
+
+    def _restart_cv2_capture(self):
+        """OpenCV 取帧连续失败时重启 capture 对象（线程安全：仅在主线程调用）。"""
+        try:
+            if self.capture is not None:
+                try:
+                    self.capture.release()
+                except Exception:
+                    pass
+                self.capture = None
+            idx = getattr(self, "_cv2_camera_index", 0)
+            self.capture = cv2.VideoCapture(idx)
+            if not self.capture.isOpened():
+                _ad = getattr(cv2, "CAP_ANDROID", None)
+                if _ad is not None:
+                    self.capture = cv2.VideoCapture(idx, _ad)
+            crash_log.write_crash("[camera] cv2 capture restarted, opened=%s\n"
+                                  % (self.capture.isOpened() if self.capture else False))
+        except Exception:
+            crash_log.write_crash("[camera] cv2 capture restart FAILED\n%s\n" % traceback.format_exc())
 
     def _update_kivy_frame(self, dt):
         if getattr(self, "kivy_camera", None) is None:
@@ -723,7 +770,20 @@ class CameraView(FloatLayout):
             return
         try:
             px = tex.pixels
-            mean_r = sum(px[0::4]) // max(1, w * h)
+            # 采样而非全量求和：取中心区域 + 均匀分布的 25 个采样点
+            # 640x480 纹理全量求和在 Python 里很慢，采样足够判断黑屏
+            n = w * h
+            step = max(1, int((n / 25) ** 0.5))
+            total = 0
+            count = 0
+            half_w = w // 2
+            half_h = h // 2
+            for sy in range(max(0, half_h - 20), min(h, half_h + 20), 4):
+                row_start = sy * w * 4
+                for sx in range(max(0, half_w - 20), min(w, half_w + 20), 4):
+                    total += px[row_start + sx * 4]
+                    count += 1
+            mean_r = total // max(1, count)
         except Exception:
             return
         if mean_r >= 16:
@@ -745,6 +805,8 @@ class CameraView(FloatLayout):
             self._restart_kivy_camera("black")
 
     def _restart_kivy_camera(self, reason):
+        # 先取消旧的帧更新定时器，避免泄漏（多次重启后多个定时器并发）
+        Clock.unschedule(self._update_kivy_frame)
         if getattr(self, "kivy_camera", None) is not None:
             try:
                 self.kivy_camera.play = False
@@ -944,9 +1006,6 @@ class InfoPanel(ScrollView):
     def _update_bg(self, *args):
         self._bg_rect.pos = self.pos
         self._bg_rect.size = self.size
-
-    def _clear(self):
-        self.container.clear_widgets()
 
     def _show_permission_denied(self):
         self._clear()
@@ -1480,7 +1539,10 @@ def request_android_camera_permission(callback=None):
             if callback:
                 callback(granted)
 
-        run_on_ui_thread(lambda: request_permissions([Permission.CAMERA], _cb))()
+        @run_on_ui_thread
+        def _request():
+            request_permissions([Permission.CAMERA], _cb)
+        _request()
     except Exception as e:
         import traceback as _tb
         crash_log.write_crash("[perm] request failed: %s\n%s\n" % (e, _tb.format_exc()))
@@ -1506,6 +1568,40 @@ class ColorAssistantApp(App):
             _boot_marker("build-failed")
             self._build_failed = True
             return self._error_screen(tb)
+
+    def on_pause(self):
+        """应用退到后台时释放相机，避免资源泄漏和回到前台黑屏。"""
+        try:
+            cv = getattr(self, "camera_view", None)
+            if cv is not None and getattr(cv, "_camera_started", False):
+                cv.stop_camera()
+                self._camera_was_running = True
+                crash_log.write_crash("[lifecycle] on_pause: camera released\n")
+        except Exception:
+            pass
+        return True
+
+    def on_resume(self):
+        """应用回到前台时恢复相机。"""
+        try:
+            cv = getattr(self, "camera_view", None)
+            if cv is not None and getattr(self, "_camera_was_running", False):
+                self._camera_was_running = False
+                # 延迟 0.5s 等系统相机服务恢复就绪
+                Clock.schedule_once(lambda dt: cv.start_camera(), 0.5)
+                crash_log.write_crash("[lifecycle] on_resume: camera restart scheduled\n")
+        except Exception:
+            pass
+
+    def on_stop(self):
+        """应用退出时释放相机资源。"""
+        try:
+            cv = getattr(self, "camera_view", None)
+            if cv is not None:
+                cv.stop_camera()
+                crash_log.write_crash("[lifecycle] on_stop: camera released\n")
+        except Exception:
+            pass
 
     def _error_screen(self, tb):
         """构建失败时显示错误堆栈（用户可直接截图回传，不依赖文件传输）。"""
@@ -1558,7 +1654,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.3.4"
+        self.title = "AI 调色助手 v1.4.0"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1586,7 +1682,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.3.4", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.4.0", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)

@@ -118,7 +118,6 @@ def write_crash(text):
         return True
     except Exception:
         return False
-    return False
 
 
 def _crash_file():
