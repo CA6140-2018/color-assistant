@@ -540,7 +540,9 @@ class CameraView(FloatLayout):
                             break
                         if ok and fr is not None and fr.size:
                             m = int(fr.mean())
-                            crash_log.write_crash("[camera] probe[%s] mean=%d\n" % (name, m))
+                            sh = fr.shape
+                            ch = fr.shape[2] if len(fr.shape) == 3 else 1
+                            crash_log.write_crash("[camera] probe[%s] mean=%d shape=%s channels=%d\n" % (name, m, sh, ch))
                             if m >= 10:
                                 chose = cap
                                 break
@@ -636,9 +638,25 @@ class CameraView(FloatLayout):
             if not self._camera_active or self.capture is None:
                 return
             ret, frame = self.capture.read()
-            if not ret:
+            if not ret or frame is None or frame.size == 0:
                 return
             import numpy as np
+            # ── 帧格式归一化：Android 上 OpenCV 可能返回单通道（YUV 的 Y 分量），
+            #    必须显式转 BGR 才能正确显示和取色。之前 v1.3.4 黑屏的根因在此。
+            if len(frame.shape) == 2:
+                # 单通道灰度 / YUV-Y 平面 → 转 BGR3
+                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+                if not getattr(self, "_fmt_logged", False):
+                    self._fmt_logged = True
+                    crash_log.write_crash("[camera] frame was single-channel, converted GRAY2BGR shape=%s\n" % (frame.shape,))
+            elif frame.shape[2] == 1:
+                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+                if not getattr(self, "_fmt_logged", False):
+                    self._fmt_logged = True
+                    crash_log.write_crash("[camera] frame shape[2]=1, converted GRAY2BGR shape=%s\n" % (frame.shape,))
+            elif frame.shape[2] == 4:
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+            # 其余情况按 BGR 处理（shape[2]==3）
             self._frame = Frame(frame.tobytes(), frame.shape[1], frame.shape[0], src="bgr")
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frame_rgb = np.rot90(frame_rgb)
