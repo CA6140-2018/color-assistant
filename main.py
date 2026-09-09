@@ -422,6 +422,34 @@ class CameraView(FloatLayout):
         self._camera_active = False
         self._use_cv2_android = None
 
+        # ── 诊断上屏：无 adb 环境，靠界面实时显示取帧状态供截图反馈 ──
+        self._diag_text = "diag: 等待取帧"
+        self._diag_backend = "unknown"
+        self._diag_rgb = "n/a"
+        self._diag_label = Label(
+            text=self._diag_text,
+            font_size=dp(11),
+            color=(1, 1, 0.15, 1),
+            size_hint=(None, None),
+            width=dp(330), height=dp(64),
+            pos_hint={"right": 0.98, "top": 0.98},
+            halign="right", valign="top",
+        )
+        self._diag_label.bind(texture_size=self._diag_label_autosize)
+        self.add_widget(self._diag_label)
+        self._diag_timer = Clock.schedule_interval(self._diag_refresh, 1.0)
+
+    def _diag_label_autosize(self, *a):
+        self._diag_label.size = self._diag_label.texture_size
+
+    def _diag_refresh(self, dt):
+        self._diag_label.text = "%s\nRBG=%s" % (self._diag_text, self._diag_rgb)
+
+    def _set_diag(self, text, rgb=None):
+        self._diag_text = text
+        if rgb is not None:
+            self._diag_rgb = rgb
+
     def _center_crosshair(self, *args):
         self.crosshair.center = self.center
         self.crosshair_outline.center = self.center
@@ -490,10 +518,12 @@ class CameraView(FloatLayout):
             self.capture = cap
             self._use_cv2_android = True
             self._camera_active = True
+            self._diag_backend = "cv2"
             Clock.schedule_interval(self._update_cv2_frame, 1.0 / 30)
             crash_log.write_crash("[camera] cv2-android active\n")
         else:
             self._use_cv2_android = False
+            self._diag_backend = "kivy"
             if self.kivy_camera is None and not getattr(self, "_cam_sched", False):
                 self._cam_sched = True
                 Clock.schedule_once(self._init_android_camera, 0)
@@ -678,6 +708,14 @@ class CameraView(FloatLayout):
             elif frame.shape[2] == 4:
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
             # 其余情况按 BGR 处理（shape[2]==3）
+            # ── 诊断上屏：亮度均值（旋转前原始图）——决定画面是黑是亮 ──
+            self._set_diag(
+                "cv2 取帧: %dx%d ch=%d 相机=%s" % (
+                    frame.shape[1], frame.shape[0],
+                    (frame.shape[2] if len(frame.shape) == 3 else 1),
+                    "开" if self._camera_active else "关"),
+                rgb="亮度=%d" % int(frame.mean()),
+            )
             self._frame = Frame(frame.tobytes(), frame.shape[1], frame.shape[0], src="bgr")
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frame_rgb = np.rot90(frame_rgb)
@@ -737,6 +775,23 @@ class CameraView(FloatLayout):
             pixels = tex.pixels
             if pixels:
                 self._frame = Frame(pixels, w, h, src="rgba_flip")
+                # 诊断上屏：中心区采样亮度，避免全量 mean 太慢
+                try:
+                    hw, hh = w // 2, h // 2
+                    tot = 0
+                    cnt = 0
+                    for sy in range(max(0, hh - 10), min(h, hh + 10), 2):
+                        rs = sy * w * 4
+                        for sx in range(max(0, hw - 10), min(w, hw + 10), 2):
+                            tot += pixels[rs + sx * 4]
+                            cnt += 1
+                    if cnt:
+                        self._set_diag(
+                            "Kivy 纹理: %dx%d 有内容" % (w, h),
+                            rgb="亮度=%d" % (tot // cnt),
+                        )
+                except Exception:
+                    pass
                 if getattr(self, "_diag_frames", 0) == 0:
                     self._diag_frames = 1
                     try:
@@ -1654,7 +1709,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.4.0"
+        self.title = "AI 调色助手 v1.4.1"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1682,7 +1737,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.4.0", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.4.1", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
