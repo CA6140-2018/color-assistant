@@ -346,8 +346,12 @@ class TexView(Widget):
         self.bind(pos=self._redraw, size=self._redraw)
 
     def set_texture(self, tex):
-        self._tex = tex
-        self._redraw()
+        # 只在纹理对象变化时重建画布；纹理对象未变时仅内容刷新，直接复用
+        # （否则每帧 canvas.clear()+重建 Rectangle 在部分 Android GL 上会破坏渲染，
+        #   导致取帧正常但画面全黑——正是本次黑屏的根因之一）
+        if self._tex is not tex:
+            self._tex = tex
+            self._redraw()
 
     def set_rotation(self, rot):
         self._rot = int(rot) % 360
@@ -708,34 +712,40 @@ class CameraView(FloatLayout):
             elif frame.shape[2] == 4:
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
             # 其余情况按 BGR 处理（shape[2]==3）
-            # ── 诊断上屏：亮度均值（旋转前原始图）——决定画面是黑是亮 ──
-            self._set_diag(
-                "cv2 取帧: %dx%d ch=%d 相机=%s" % (
-                    frame.shape[1], frame.shape[0],
-                    (frame.shape[2] if len(frame.shape) == 3 else 1),
-                    "开" if self._camera_active else "关"),
-                rgb="亮度=%d" % int(frame.mean()),
-            )
             self._frame = Frame(frame.tobytes(), frame.shape[1], frame.shape[0], src="bgr")
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frame_rgb = np.rot90(frame_rgb)
             frame_rgb = np.flipud(frame_rgb)
             buf = frame_rgb.tobytes()
+            # ── 诊断：转换+旋转后中心像素 RGB（判定渲染数据是否被弄黑）──
+            try:
+                _hh = frame_rgb.shape[0] // 2
+                _ww = frame_rgb.shape[1] // 2
+                _cx = _ww if _ww < frame_rgb.shape[1] else frame_rgb.shape[1] - 1
+                _cy = _hh if _hh < frame_rgb.shape[0] else frame_rgb.shape[0] - 1
+                _pc = frame_rgb[_cy][_cx]
+                self._set_diag(
+                    "cv2 取帧: %dx%d 中心RGB=(%d,%d,%d)" % (
+                        frame.shape[1], frame.shape[0],
+                        int(_pc[0]), int(_pc[1]), int(_pc[2])),
+                    rgb="亮度=%d" % int(frame.mean()),
+                )
+            except Exception:
+                pass
             if (
                 self._texture is None
                 or self._texture.size[0] != frame_rgb.shape[1]
                 or self._texture.size[1] != frame_rgb.shape[0]
             ):
                 self._texture = Texture.create(size=(frame_rgb.shape[1], frame_rgb.shape[0]), colorfmt="rgb")
-            # flip_horizontal 是只读属性不能赋值(2fbcd29 在这崩)
-            # 画面方向已由上方 rot90+flipud 校正，如需镜像改用 tex_coords 或调整 np 变换
             self._texture.blit_buffer(buf, colorfmt="rgb")
             self.tex_view.set_texture(self._texture)
             self._on_first_frame()
-        except Exception:
-            # 相机帧处理不容许让整个应用退出：出错仅记异常，避免反复崩
-            # 但连续失败过多时尝试重启 capture
-            traceback.print_exc()
+        except Exception as e:
+            # 关键：帧处理异常写入日志并上屏，绝不静默黑屏（print_exc 用户看不到）
+            tb = traceback.format_exc()
+            crash_log.write_crash("[camera] cv2 frame EXC: %s\n%s\n" % (e, tb))
+            self._set_diag("cv2 帧异常: %s" % (e,), rgb="画面黑")
             self._cv2_frame_exc = getattr(self, "_cv2_frame_exc", 0) + 1
             if self._cv2_frame_exc >= 30:
                 self._cv2_frame_exc = 0
@@ -1709,7 +1719,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.4.1"
+        self.title = "AI 调色助手 v1.4.2"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1737,7 +1747,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.4.1", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.4.2", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
