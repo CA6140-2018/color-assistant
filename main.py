@@ -399,6 +399,9 @@ class CameraView(FloatLayout):
         self.tex_view = TexView(size_hint=(1, 1))
         self.tex_view.set_rotation(self._rotation)
         self.add_widget(self.tex_view)
+        # v1.5.0：多个界面共享同一相机纹理的输出目标，避免移动 widget 导致该
+        # 设备 GL 下纹理不再上屏(黑屏)。主界面用 self.tex_view，AI 屏用其自有 sink。
+        self._preview_sinks = [self.tex_view]
 
         self._placeholder = BoxLayout(orientation="vertical", size_hint=(None, None), size=(dp(120), dp(120)),
                                        pos_hint={"center_x": 0.5, "center_y": 0.5})
@@ -461,6 +464,21 @@ class CameraView(FloatLayout):
         self._diag_text = text
         if rgb is not None:
             self._diag_rgb = rgb
+
+    def _add_preview_sink(self, sink):
+        if sink not in self._preview_sinks:
+            self._preview_sinks.append(sink)
+
+    def _remove_preview_sink(self, sink):
+        if sink in self._preview_sinks:
+            self._preview_sinks.remove(sink)
+
+    def _push_preview(self, tex):
+        for s in list(self._preview_sinks):
+            try:
+                s.set_texture(tex)
+            except Exception:
+                pass
 
     def _center_crosshair(self, *args):
         self.crosshair.center = self.center
@@ -628,20 +646,21 @@ class CameraView(FloatLayout):
         self._camera_started = True
 
     def _init_android_camera(self, dt):
-        """主线程创建 Kivy 系统相机，直接显示其自带渲染（v1.4.5）。
+        """主线程创建 Kivy 系统相机作为"纹理源"，显示统一由 TexView 负责(v1.5.0)。
 
-        之前把相机设为不可见、再用自研 TexView(自定义 Rectangle+texture) 渲染，
-        但小米8 Adreno630 上自定义纹理采样渲染不生效(画面黑、有内容却不显示)。
-        现在让 KivyCamera 组件自身渲染(走 Android 官方 preview 管线)，必出真彩画面；
-        取色仍从 camera.texture.pixels 读取(_update_kivy_frame)。"""
+        相机组件本身隐藏(opacity=0)不画，只负责持续出帧喂 texture；每个界面
+        (主界面 tex_view / AI 屏 sink)通过 _push_preview 取同一纹理自行绘制，
+        旋转用 tex_coords UV 重映射(不使用 GPU 矩阵变换，避开该设备 shader 失败)。
+        """
         self._cam_sched = False
         if self.kivy_camera is not None:
             return
         try:
             from kivy.uix.camera import Camera as KivyCamera
             c = KivyCamera(play=True, index=0, resolution=(640, 480))
-            c.size_hint = (1, 1)     # 铺满相机区，由组件自身渲染显示
-            c.opacity = 1            # 可见（不再 hidden、不再屏外）
+            c.size_hint = (1, 1)
+            c.pos_hint = {"x": 0, "y": 0}
+            c.opacity = 0                 # 只作纹理源，不自己画
             self.add_widget(c)
             self.kivy_camera = c
             self._black_watch_on = False
@@ -790,7 +809,7 @@ class CameraView(FloatLayout):
         tex = self.kivy_camera.texture
         if tex is None:
             return
-        self.tex_view.set_texture(tex)
+        self._push_preview(tex)
         self._on_first_frame()
         w, h = tex.size
         try:
@@ -1312,6 +1331,11 @@ class AiMixScreen(BoxLayout):
         self.cam_area = FloatLayout()
         self.cam_area.size_hint = (1, 0.55)
         _bg(self.cam_area, (0.039, 0.086, 0.157, 1))  # 深色取景背景
+        # v1.5.0：AI 屏自己的取景 sink，引用与主界面相同的相机纹理（不移动相机组件）。
+        # 垫在最底层(index=0)，准星与提示在其上。
+        self.preview_sink = TexView(size_hint=(1, 1))
+        self.preview_sink.set_rotation(90)
+        self.cam_area.add_widget(self.preview_sink, index=0)
         self.tip = Label(
             text="点击画面任意位置，选取目标模板色", font_size=dp(13), color=(0.75, 0.80, 0.86, 1),
             size_hint=(None, None), size=(dp(260), dp(26)),
@@ -1731,7 +1755,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.4.5"
+        self.title = "AI 调色助手 v1.5.0"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1759,7 +1783,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.4.5", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.5.0", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
@@ -1864,29 +1888,21 @@ class ColorAssistantApp(App):
     def _on_open_mix(self):
         if self.mix_screen is not None:
             return
-        if self.camera_view.parent is not None:
-            self.camera_view.parent.remove_widget(self.camera_view)
-        self.camera_view.size_hint = (1, 1)
-        # FloatLayout 不重排无 pos_hint 的子控件，会保留 BoxLayout 里的旧坐标
-        self.camera_view.pos_hint = {"x": 0, "y": 0}
+        # v1.5.0：不移动 camera_view（移动会触发该设备 GL 下纹理不再上屏 → AI 屏黑屏）。
+        # mix_screen 作为不透明顶层覆盖在主界面上；AI 屏用自己的 preview_sink 引用
+        # 同一相机纹理绘制取景，与主界面 tex_view 并存、共享纹理。
         self.mix_screen = AiMixScreen(camera_view=self.camera_view)
         self.mix_screen.size_hint = (1, 1)
+        self.mix_screen.pos = (0, 0)
         self.root.add_widget(self.mix_screen)
-        # index=0：摄像头垫底，让上层的准星和"点击选取目标"提示可见
-        self.mix_screen.cam_area.add_widget(self.camera_view, index=0)
+        self.camera_view._add_preview_sink(self.mix_screen.preview_sink)
         self.mix_screen.open(on_close=self._on_close_mix)
 
     def _on_close_mix(self):
         if self.mix_screen is None:
             return
+        self.camera_view._remove_preview_sink(self.mix_screen.preview_sink)
         self.mix_screen.shutdown()
-        landscape = Window.width > Window.height and Window.width > 600
-        self.camera_view.size_hint = (0.60, 1) if landscape else (1, 0.60)
-        self.camera_view.pos_hint = {}
-        self.mix_screen.cam_area.remove_widget(self.camera_view)
-        # 必须插到 children 末尾：竖向 BoxLayout 里 children[0] 排底部，
-        # index=0 会把摄像头放到底部——布局颠倒的根因
-        self._body.add_widget(self.camera_view, index=len(self._body.children))
         self.root.remove_widget(self.mix_screen)
         self.mix_screen = None
 
