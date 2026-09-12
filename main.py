@@ -343,31 +343,39 @@ class TexView(Widget):
         super().__init__(**kwargs)
         self._tex = None
         self._rot = 0
+        self._rect = None       # 持久 Rectangle 指令：只在首次创建，之后仅更新属性
         self.bind(pos=self._redraw, size=self._redraw)
 
     def set_texture(self, tex):
-        # 只在纹理对象变化时重建画布；纹理对象未变时仅内容刷新，直接复用
-        # （否则每帧 canvas.clear()+重建 Rectangle 在部分 Android GL 上会破坏渲染，
-        #   导致取帧正常但画面全黑——正是本次黑屏的根因之一）
-        if self._tex is not tex:
-            self._tex = tex
-            self._redraw()
+        # 每次都要重绘（v1.4.2 的"只在对象变化时重画"会在首次布局未就绪时
+        # 放弃绘制，之后永不重画→黑屏）。首次创建持久 rect，之后只更新属性。
+        self._tex = tex
+        self._redraw()
 
     def set_rotation(self, rot):
         self._rot = int(rot) % 360
         self._redraw()
 
     def _redraw(self, *args):
-        self.canvas.clear()
-        if self._tex is None or self.width <= 1 or self.height <= 1:
+        if self._tex is None:
             return
-        with self.canvas:
-            Rectangle(
-                texture=self._tex,
-                pos=self.pos,
-                size=self.size,
-                tex_coords=_UV_MAP.get(self._rot, _UV_MAP[0]),
-            )
+        uv = _UV_MAP.get(self._rot, _UV_MAP[0])
+        if self._rect is None:
+            # 用持久 Rectangle：只创建一次，不清 canvas、不每次重建。
+            # （canvas.clear()+每帧重建 Rectangle 在小米8 Adreno630 GL 上破坏渲染，
+            #   导致取帧正常但画面全黑——黑屏根因）
+            with self.canvas:
+                self._rect = Rectangle(
+                    texture=self._tex,
+                    pos=self.pos,
+                    size=self.size,
+                    tex_coords=uv,
+                )
+        else:
+            self._rect.texture = self._tex
+            self._rect.pos = self.pos
+            self._rect.size = self.size
+            self._rect.tex_coords = uv
 
 
 class CameraView(FloatLayout):
@@ -1719,7 +1727,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.4.2"
+        self.title = "AI 调色助手 v1.4.3"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1747,7 +1755,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.4.2", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.4.3", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
