@@ -628,20 +628,20 @@ class CameraView(FloatLayout):
         self._camera_started = True
 
     def _init_android_camera(self, dt):
-        """主线程创建隐藏采集器（三重隐藏，防漏画面）。"""
+        """主线程创建 Kivy 系统相机，直接显示其自带渲染（v1.4.5）。
+
+        之前把相机设为不可见、再用自研 TexView(自定义 Rectangle+texture) 渲染，
+        但小米8 Adreno630 上自定义纹理采样渲染不生效(画面黑、有内容却不显示)。
+        现在让 KivyCamera 组件自身渲染(走 Android 官方 preview 管线)，必出真彩画面；
+        取色仍从 camera.texture.pixels 读取(_update_kivy_frame)。"""
         self._cam_sched = False
         if self.kivy_camera is not None:
             return
         try:
             from kivy.uix.camera import Camera as KivyCamera
             c = KivyCamera(play=True, index=0, resolution=(640, 480))
-            c.size_hint = (None, None)
-            # 尺寸用实际预览分辨率而非 0×0：某些机型把预览 Surface 设成 0×0 时
-            # 相机后端不会出帧（纹理一直为黑）。仍放屏外 + 透明，不参与显示，
-            # 画面统一由 tex_view 旋转后展示，避免与相机自带渲染重叠。
-            c.size = (640, 480)
-            c.pos = (-2000, -2000)
-            c.opacity = 0
+            c.size_hint = (1, 1)     # 铺满相机区，由组件自身渲染显示
+            c.opacity = 1            # 可见（不再 hidden、不再屏外）
             self.add_widget(c)
             self.kivy_camera = c
             self._black_watch_on = False
@@ -649,7 +649,7 @@ class CameraView(FloatLayout):
             self._black_restarts = 0
             self._diag_frames = 0
             self._init_black_watch()
-            crash_log.write_crash("[camera] KivyCamera created ok (prewarmed size, hidden)\n")
+            crash_log.write_crash("[camera] KivyCamera displayed for native preview\n")
         except Exception as e:
             import traceback as _tb
             crash_log.write_crash("[camera] KivyCamera create FAILED: %s\n%s\n" % (e, _tb.format_exc()))
@@ -1731,7 +1731,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.4.4"
+        self.title = "AI 调色助手 v1.4.5"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1759,7 +1759,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.4.4", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.4.5", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
