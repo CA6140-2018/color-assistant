@@ -336,6 +336,18 @@ _UV_MAP = {
 }
 
 
+def _letterbox_size(tw, th, w, h):
+    """返回在 (w,h) 内、保持 tw:th 宽高比的居中矩形 (w', h')。
+
+    取景区是竖屏、相机纹理是横屏，直接铺满会被压扁/拉长导致画面变形
+    (配比分析界面"混乱"的主因之一)。等比缩小后四周露出深色背景即可。
+    """
+    if tw <= 0 or th <= 0 or w <= 0 or h <= 0:
+        return (w, h)
+    scale = min(w / tw, h / th)
+    return (int(tw * scale), int(th * scale))
+
+
 class TexView(Widget):
     """用默认 shader 的 Rectangle + tex_coords 显示纹理并实现 0/90/180/270 旋转。"""
 
@@ -360,6 +372,14 @@ class TexView(Widget):
         if self._tex is None:
             return
         uv = _UV_MAP.get(self._rot, _UV_MAP[0])
+        tw, th = self._tex.size
+        # 90/270 旋转会交换宽高，用旋转后的"视觉宽高比"做等比缩放，避免画面压扁/拉长
+        if self._rot in (90, 270):
+            dw, dh = _letterbox_size(th, tw, self.width, self.height)
+        else:
+            dw, dh = _letterbox_size(tw, th, self.width, self.height)
+        x = self.x + (self.width - dw) / 2.0
+        y = self.y + (self.height - dh) / 2.0
         if self._rect is None:
             # 用持久 Rectangle：只创建一次，不清 canvas、不每次重建。
             # （canvas.clear()+每帧重建 Rectangle 在小米8 Adreno630 GL 上破坏渲染，
@@ -367,14 +387,70 @@ class TexView(Widget):
             with self.canvas:
                 self._rect = Rectangle(
                     texture=self._tex,
-                    pos=self.pos,
-                    size=self.size,
+                    pos=(x, y),
+                    size=(dw, dh),
                     tex_coords=uv,
                 )
         else:
             self._rect.texture = self._tex
-            self._rect.pos = self.pos
-            self._rect.size = self.size
+            self._rect.pos = (x, y)
+            self._rect.size = (dw, dh)
+            self._rect.tex_coords = uv
+
+
+class PixSinkView(Widget):
+    """AI 屏专属取景：用【自己独立的纹理对象】喂帧（不共享 KivyCamera 纹理）。
+
+    小米8(Adreno630)上同一纹理挂第二个 Rectangle 不渲染(黑屏)，主界面能用、
+    AI 屏黑就是这原因。所以 AI 屏把像素拷进自建纹理再画——两个矩形对应两个
+    不同纹理对象，各自都能上屏。v1.6.0
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._tex = None
+        self._rect = None
+        self._rot = 0
+        self.bind(pos=self._redraw, size=self._redraw)
+
+    def set_rotation(self, rot):
+        self._rot = int(rot) % 360
+        self._redraw()
+
+    def feed_pixels(self, pixels, w, h):
+        # 复用 Kivy 相机已读出的像素，blit 进本屏专属纹理（无额外读回，只有一次上行）
+        if (
+            self._tex is None
+            or self._tex.size[0] != w
+            or self._tex.size[1] != h
+        ):
+            self._tex = Texture.create(size=(w, h), colorfmt="rgba")
+        self._tex.blit_buffer(pixels, colorfmt="rgba")
+        self._redraw()
+
+    def _redraw(self, *args):
+        if self._tex is None:
+            return
+        uv = _UV_MAP.get(self._rot, _UV_MAP[0])
+        tw, th = self._tex.size
+        if self._rot in (90, 270):
+            dw, dh = _letterbox_size(th, tw, self.width, self.height)
+        else:
+            dw, dh = _letterbox_size(tw, th, self.width, self.height)
+        x = self.x + (self.width - dw) / 2.0
+        y = self.y + (self.height - dh) / 2.0
+        if self._rect is None:
+            with self.canvas:
+                self._rect = Rectangle(
+                    texture=self._tex,
+                    pos=(x, y),
+                    size=(dw, dh),
+                    tex_coords=uv,
+                )
+        else:
+            self._rect.texture = self._tex
+            self._rect.pos = (x, y)
+            self._rect.size = (dw, dh)
             self._rect.tex_coords = uv
 
 
@@ -386,7 +462,8 @@ class CameraView(FloatLayout):
         self.on_color_picked = on_color_picked
         self._frame = None
         self._camera_started = False
-        self._rotation = 90 if IS_ANDROID else 0
+        # 取景框统一逆时针旋转 90°(270=CW 270≡CCW 90)，与桌面 np.rot90 的 CCW 约定对齐
+        self._rotation = 270 if IS_ANDROID else 0
 
         # 暗色背景占满（让摄像头区域不是白色）。
         # 画在 canvas.before 且只更新属性：子控件画布挂在主 canvas 里，
@@ -402,6 +479,9 @@ class CameraView(FloatLayout):
         # v1.5.0：多个界面共享同一相机纹理的输出目标，避免移动 widget 导致该
         # 设备 GL 下纹理不再上屏(黑屏)。主界面用 self.tex_view，AI 屏用其自有 sink。
         self._preview_sinks = [self.tex_view]
+        # v1.6.0：另设"像素 sink"列表——AI 屏不共享纹理，而是每帧收到像素后
+        # 填入自建纹理再绘制，避开该设备"同一纹理第二个 Rectangle 不渲染"的黑屏。
+        self._pixel_sinks = []
 
         self._placeholder = BoxLayout(orientation="vertical", size_hint=(None, None), size=(dp(120), dp(120)),
                                        pos_hint={"center_x": 0.5, "center_y": 0.5})
@@ -472,6 +552,14 @@ class CameraView(FloatLayout):
     def _remove_preview_sink(self, sink):
         if sink in self._preview_sinks:
             self._preview_sinks.remove(sink)
+
+    def _add_pixel_sink(self, sink):
+        if sink not in self._pixel_sinks:
+            self._pixel_sinks.append(sink)
+
+    def _remove_pixel_sink(self, sink):
+        if sink in self._pixel_sinks:
+            self._pixel_sinks.remove(sink)
 
     def _push_preview(self, tex):
         for s in list(self._preview_sinks):
@@ -815,6 +903,13 @@ class CameraView(FloatLayout):
         try:
             pixels = tex.pixels
             if pixels:
+                # v1.6.0：AI 屏像素 sink——把已读出的像素喂给各屏自建纹理
+                if self._pixel_sinks:
+                    for s in list(self._pixel_sinks):
+                        try:
+                            s.feed_pixels(pixels, w, h)
+                        except Exception:
+                            pass
                 self._frame = Frame(pixels, w, h, src="rgba_flip")
                 # 诊断上屏：中心区采样亮度，避免全量 mean 太慢
                 try:
@@ -1331,10 +1426,10 @@ class AiMixScreen(BoxLayout):
         self.cam_area = FloatLayout()
         self.cam_area.size_hint = (1, 0.55)
         _bg(self.cam_area, (0.039, 0.086, 0.157, 1))  # 深色取景背景
-        # v1.5.0：AI 屏自己的取景 sink，引用与主界面相同的相机纹理（不移动相机组件）。
+        # v1.6.0：AI 屏用自己的 PixSinkView（独立纹理，避开该设备共享纹理黑屏）。
         # 垫在最底层(index=0)，准星与提示在其上。
-        self.preview_sink = TexView(size_hint=(1, 1))
-        self.preview_sink.set_rotation(90)
+        self.preview_sink = PixSinkView(size_hint=(1, 1))
+        self.preview_sink.set_rotation(270)
         self.cam_area.add_widget(self.preview_sink, index=0)
         self.tip = Label(
             text="点击画面任意位置，选取目标模板色", font_size=dp(13), color=(0.75, 0.80, 0.86, 1),
@@ -1755,7 +1850,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.5.0"
+        self.title = "AI 调色助手 v1.6.0"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1783,7 +1878,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.5.0", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.6.0", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
@@ -1895,13 +1990,14 @@ class ColorAssistantApp(App):
         self.mix_screen.size_hint = (1, 1)
         self.mix_screen.pos = (0, 0)
         self.root.add_widget(self.mix_screen)
-        self.camera_view._add_preview_sink(self.mix_screen.preview_sink)
+        # v1.6.0：AI 屏走像素源（独立纹理），不再共享 KivyCamera 纹理对象
+        self.camera_view._add_pixel_sink(self.mix_screen.preview_sink)
         self.mix_screen.open(on_close=self._on_close_mix)
 
     def _on_close_mix(self):
         if self.mix_screen is None:
             return
-        self.camera_view._remove_preview_sink(self.mix_screen.preview_sink)
+        self.camera_view._remove_pixel_sink(self.mix_screen.preview_sink)
         self.mix_screen.shutdown()
         self.root.remove_widget(self.mix_screen)
         self.mix_screen = None
