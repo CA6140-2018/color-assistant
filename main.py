@@ -492,17 +492,21 @@ class CameraView(FloatLayout):
                 self._camera_started = True
                 Clock.schedule_interval(self._update_cv2_frame, 1.0 / 30)
         else:
-            self._camera_started = True
-            # 先尝试 OpenCV(CAP_ANDROID) 取帧：小米8 上 Kivy 后端纹理常全黑，
-            # 而系统相机正常说明标准 Camera API 可取到帧。探针在线程里只算不碰 UI。
-            if self._use_cv2_android is not None:
+            if self._camera_started:
                 return
-            self._cv2_probe_done = False
-            self._cv2_probe_cap = None
-            from threading import Thread
-            Thread(target=self._probe_cv2_android, args=(camera_index,), daemon=True).start()
-            self._probe_poller = Clock.schedule_interval(self._poll_cv2_probe, 0.3)
-            Clock.schedule_once(self._frame_guard, 10.0)
+            self._camera_started = True
+            # v1.4.4: Android 直接用 Kivy 原生系统相机，不再走 OpenCV。
+            # adb 抓取的 logcat 证实：小米8 的 CamX HAL 对 OpenCV CAP_ANDROID 报
+            #   "camxautofocusnode.cpp FATAL: Failed to get peer pipeline ID"
+            # 只能取到异常灰度帧且渲染黑屏。Kivy camera 走 Android 官方预览管线，
+            # 纹理为彩色真画面（_update_kivy_frame 渲染 + texture.pixels 取色）。
+            self._diag_backend = "kivy"
+            self._use_cv2_android = False
+            if self.kivy_camera is None and not getattr(self, "_cam_sched", False):
+                self._cam_sched = True
+                Clock.schedule_once(self._init_android_camera, 0)
+            else:
+                self._init_android_camera(0)
 
     def _frame_guard(self, dt):
         """10s 兜底：若 cv2 探针仍未决断（线程异常），回退 Kivy。"""
@@ -1727,7 +1731,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.4.3"
+        self.title = "AI 调色助手 v1.4.4"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1755,7 +1759,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.4.3", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.4.4", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
