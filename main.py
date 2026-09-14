@@ -1,4 +1,4 @@
-"""
+﻿"""
 AI 调色助手 - 主程序（设备安全渲染版）
 """
 
@@ -159,6 +159,7 @@ from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.label import Label
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.slider import Slider
+from kivy.uix.camera import Camera as _KivyCameraBase
 from kivy.uix.widget import Widget
 import numpy as np
 _boot_marker("4-kivy-imports-done")
@@ -366,7 +367,7 @@ class TexView(Widget):
         self._redraw()
 
     def feed_pixels(self, pixels, w, h):
-        # v1.6.2 主界面同 AI 屏：不用活跃相机纹理对象直接绘制(Adreno630 上黑屏)，
+        # v1.6.3 主界面同 AI 屏：不用活跃相机纹理对象直接绘制(Adreno630 上黑屏)，
         # 而是把已读出的像素 blit 进**本屏自建的独立纹理**再绘制——两个矩形对应
         # 两个不同纹理对象，各自都能上屏。
         if (
@@ -466,6 +467,68 @@ class PixSinkView(Widget):
             self._rect.pos = (x, y)
             self._rect.size = (dw, dh)
             self._rect.tex_coords = uv
+
+
+class RotatableCamera(_KivyCameraBase):
+    """官方预览上屏 v1.6.3：让 KivyCamera 组件本体(带 SDL native preview surface)
+    直接渲染取景——这正是第三方相机 app 的原理：相机帧由 OS 相机 HAL 直接合成，
+    不把像素读回 CPU 再重传(那块 Adreno630 上重传纹理就是黑)。
+    旋转/等比只改组件内部显示矩形(带纹理的 Rectangle)的 tex_coords 与 pos/size，
+    纯 UV 重映射，不用 GPU 矩阵变换(该设备矩阵变换会 shader 崩溃)。"""
+
+    def __init__(self, **kwargs):
+        self._uv_rot = 0
+        self._uv_rect = None
+        self._uv_search_done = False
+        super().__init__(**kwargs)
+
+    def set_rotation(self, rot):
+        self._uv_rot = int(rot) % 360
+
+    def apply_layout(self):
+        # 每帧由 _update_kivy_frame 驱动：定位内部显示矩形并施加 UV 旋转/等比。
+        tex = getattr(self, "texture", None)
+        if tex is None:
+            return
+        if self._uv_rect is None and not self._uv_search_done:
+            self._uv_rect = _find_first_textured_rect(self.canvas)
+            self._uv_search_done = True
+        rect = self._uv_rect
+        if rect is None:
+            return
+        try:
+            if getattr(rect, "texture", None) is None:
+                return
+            uv = _UV_MAP.get(self._uv_rot, _UV_MAP[0])
+            w, h = self.width, self.height
+            tw, th = tex.size
+            if self._uv_rot in (90, 270):
+                dw, dh = _letterbox_size(th, tw, w, h)
+            else:
+                dw, dh = _letterbox_size(tw, th, w, h)
+            x = self.x + (w - dw) / 2.0
+            y = self.y + (h - dh) / 2.0
+            rect.tex_coords = uv
+            rect.pos = (x, y)
+            rect.size = (dw, dh)
+            rect.texture = tex
+        except Exception:
+            pass
+
+
+def _find_first_textured_rect(canvas):
+    def walk(node):
+        for ins in getattr(node, "children", ()):
+            cn = ins.__class__.__name__
+            if cn == "Rectangle" and getattr(ins, "texture", None) is not None:
+                return ins
+            subs = getattr(ins, "children", None)
+            if subs:
+                res = walk(ins)
+                if res is not None:
+                    return res
+        return None
+    return walk(canvas)
 
 
 class CameraView(FloatLayout):
@@ -595,6 +658,12 @@ class CameraView(FloatLayout):
             return
         self._rotation = (self._rotation + 90) % 360
         self.tex_view.set_rotation(self._rotation)
+        camd = getattr(self, "kivy_camera", None)
+        if camd is not None and hasattr(camd, "set_rotation"):
+            try:
+                camd.set_rotation(self._rotation)
+            except Exception:
+                pass
 
     # ── 启动 ──
     def start_camera(self, camera_index=0):
@@ -748,29 +817,32 @@ class CameraView(FloatLayout):
         self._camera_started = True
 
     def _init_android_camera(self, dt):
-        """主线程创建 Kivy 系统相机作为"纹理源"，显示统一由 TexView 负责(v1.5.0)。
+        """主线程创建 Kivy 系统相机，本体直接可见上屏(官方 preview，v1.6.3)。
 
-        相机组件本身隐藏(opacity=0)不画，只负责持续出帧喂 texture；每个界面
-        (主界面 tex_view / AI 屏 sink)通过 _push_preview 取同一纹理自行绘制，
-        旋转用 tex_coords UV 重映射(不使用 GPU 矩阵变换，避开该设备 shader 失败)。
+        第三方相机 app 的取景也是这套原理：相机帧由 OS 相机 HAL/SDL native surface
+        直接合成到组件,不走"像素读回再重传"。此前隐藏相机(opacity=0)+自定义纹理
+        重画在该设备(Adreno630)上重传纹理渲不上 → 全黑。现在让组件自己显示，
+        旋转/等比用 apply_layout() 改内部显示矩形的 tex_coords(UV，避免 GPU 矩阵)。
         """
         self._cam_sched = False
         if self.kivy_camera is not None:
             return
         try:
-            from kivy.uix.camera import Camera as KivyCamera
-            c = KivyCamera(play=True, index=0, resolution=(640, 480))
+            c = RotatableCamera(play=True, index=0, resolution=(640, 480))
             c.size_hint = (1, 1)
             c.pos_hint = {"x": 0, "y": 0}
-            c.opacity = 0                 # 只作纹理源，不自己画
-            self.add_widget(c)
+            c.set_rotation(self._rotation)
+            # index=0 插到最底层(z 最低)：在背景之上、准星/诊断之下。
+            # Android 主取景不再用自定义 tex_view(黑色)，隐藏它。
+            self.tex_view.opacity = 0
+            self.add_widget(c, index=0)
             self.kivy_camera = c
             self._black_watch_on = False
             self._black_streak = 0
             self._black_restarts = 0
             self._diag_frames = 0
             self._init_black_watch()
-            crash_log.write_crash("[camera] KivyCamera displayed for native preview\n")
+            crash_log.write_crash("[camera] KivyCamera visible native preview (v1.6.3)\n")
         except Exception as e:
             import traceback as _tb
             crash_log.write_crash("[camera] KivyCamera create FAILED: %s\n%s\n" % (e, _tb.format_exc()))
@@ -917,10 +989,17 @@ class CameraView(FloatLayout):
             return
         self._on_first_frame()
         w, h = tex.size
+        # v1.6.3：volunteer 官方预览每帧刷新 UV 旋转/等比到相机组件的内部显示矩形
+        camd = getattr(self, "kivy_camera", None)
+        if camd is not None and hasattr(camd, "apply_layout"):
+            try:
+                camd.apply_layout()
+            except Exception:
+                pass
         try:
             pixels = tex.pixels
             if pixels:
-                # v1.6.2 主界面同 AI 屏都改走像素源(独立纹理)：不再用活跃相机纹理
+                # v1.6.3 主界面同 AI 屏都改走像素源(独立纹理)：不再用活跃相机纹理
                 # 对象直接绘制(Adreno630 上渲染黑屏)。pixels 只读一次，分别 blit 进
                 # 主屏与各 AI 屏各自的自建纹理再绘制。
                 self.tex_view.feed_pixels(pixels, w, h)
@@ -1874,7 +1953,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.6.2"
+        self.title = "AI 调色助手 v1.6.3"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1902,7 +1981,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.6.2", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.6.3", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
