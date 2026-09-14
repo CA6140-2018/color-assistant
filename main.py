@@ -361,7 +361,21 @@ class TexView(Widget):
     def set_texture(self, tex):
         # 每次都要重绘（v1.4.2 的"只在对象变化时重画"会在首次布局未就绪时
         # 放弃绘制，之后永不重画→黑屏）。首次创建持久 rect，之后只更新属性。
+        # 桌面 OpenCV 路径使用（self._texture 本就是自建独立纹理）。
         self._tex = tex
+        self._redraw()
+
+    def feed_pixels(self, pixels, w, h):
+        # v1.6.2 主界面同 AI 屏：不用活跃相机纹理对象直接绘制(Adreno630 上黑屏)，
+        # 而是把已读出的像素 blit 进**本屏自建的独立纹理**再绘制——两个矩形对应
+        # 两个不同纹理对象，各自都能上屏。
+        if (
+            self._tex is None
+            or self._tex.size[0] != w
+            or self._tex.size[1] != h
+        ):
+            self._tex = Texture.create(size=(w, h), colorfmt="rgba")
+        self._tex.blit_buffer(pixels, colorfmt="rgba")
         self._redraw()
 
     def set_rotation(self, rot):
@@ -761,6 +775,10 @@ class CameraView(FloatLayout):
             import traceback as _tb
             crash_log.write_crash("[camera] KivyCamera create FAILED: %s\n%s\n" % (e, _tb.format_exc()))
             self.kivy_camera = None
+            # 允许授权后重试：若此刻失败(如尚未授予相机权限导致的
+            # "Fail to connect to camera service")，必须复位，否则授权后
+            # start_camera() 会因 _camera_started=True 而短路、不再重开。
+            self._camera_started = False
             self._placeholder.text = "摄像头启动失败，见日志"
             return
         Clock.schedule_interval(self._update_kivy_frame, 1.0 / 30)
@@ -897,13 +915,15 @@ class CameraView(FloatLayout):
         tex = self.kivy_camera.texture
         if tex is None:
             return
-        self._push_preview(tex)
         self._on_first_frame()
         w, h = tex.size
         try:
             pixels = tex.pixels
             if pixels:
-                # v1.6.0：AI 屏像素 sink——把已读出的像素喂给各屏自建纹理
+                # v1.6.2 主界面同 AI 屏都改走像素源(独立纹理)：不再用活跃相机纹理
+                # 对象直接绘制(Adreno630 上渲染黑屏)。pixels 只读一次，分别 blit 进
+                # 主屏与各 AI 屏各自的自建纹理再绘制。
+                self.tex_view.feed_pixels(pixels, w, h)
                 if self._pixel_sinks:
                     for s in list(self._pixel_sinks):
                         try:
@@ -1729,7 +1749,11 @@ def request_android_camera_permission(callback=None):
                 callback(True)
             return
 
-        def _cb(results):
+        # p4a 的 request_permissions 回调签名在部分版本传 1 参、部分传 2 参
+        # (permissions, results)。此前只写 1 参导致 TypeError，授权后相机永不启动
+        # (logcat: _cb() takes 1 positional argument but 2 were given)。
+        def _cb(*args):
+            results = args[1] if len(args) > 1 else args[0]
             granted = any(results) if isinstance(results, (list, tuple)) else bool(results)
             crash_log.write_crash("[perm] camera permission results=%s\n" % (results,))
             if callback:
@@ -1850,7 +1874,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.6.0"
+        self.title = "AI 调色助手 v1.6.2"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1878,7 +1902,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.6.0", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.6.2", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
