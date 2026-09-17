@@ -540,9 +540,9 @@ class CameraView(FloatLayout):
         self._frame = None
         self._camera_started = False
         # 取景框统一逆时针旋转 90°(270=CW 270≡CCW 90)，与桌面 np.rot90 的 CCW 约定对齐
-        # v1.6.4：native-preview 机制下 270 会把画面顶部倒向屏幕左(逆时针斜)，
-        # 需改为 0 才与桌面 np.rot90 的正立方向一致。
-        self._rotation = 0
+        # v1.6.5：显示链路回到 tex_view 像素源 + UV 旋转，取 270(=CCW90)
+        # 与桌面 np.rot90 对齐(历史验证值)。
+        self._rotation = 270 if IS_ANDROID else 0
 
         # 暗色背景占满（让摄像头区域不是白色）。
         # 画在 canvas.before 且只更新属性：子控件画布挂在主 canvas 里，
@@ -834,9 +834,13 @@ class CameraView(FloatLayout):
             c.size_hint = (1, 1)
             c.pos_hint = {"x": 0, "y": 0}
             c.set_rotation(self._rotation)
+            # v1.6.5：原生 preview(NDL surface)的旋转参数在 Adreno630 上不生效
+            # (v1.6.3/4 用户实测 270/0 画面方向完全不变)。改回 tex_view 像素源
+            # 自建纹理显示 + UV 旋转(v1.6.0 已验证可上屏、方向精确可控)。
+            # RotatableCamera 仅作为 play 像素源，隐藏本身不显示。
             # index=0 插到最底层(z 最低)：在背景之上、准星/诊断之下。
-            # Android 主取景不再用自定义 tex_view(黑色)，隐藏它。
-            self.tex_view.opacity = 0
+            c.opacity = 0
+            self.tex_view.opacity = 1
             self.add_widget(c, index=0)
             self.kivy_camera = c
             self._black_watch_on = False
@@ -1955,7 +1959,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.6.4"
+        self.title = "AI 调色助手 v1.6.5"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1983,7 +1987,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.6.4", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.6.5", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
