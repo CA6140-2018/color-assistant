@@ -831,17 +831,19 @@ class CameraView(FloatLayout):
             return
         try:
             c = RotatableCamera(play=True, index=0, resolution=(640, 480))
-            c.size_hint = (1, 1)
-            c.pos_hint = {"x": 0, "y": 0}
+            # v1.6.6：原生 preview surface 即使 opacity=0 也疑似用深色 surface 盖住
+            # 其下的 tex_view(像素源)，导致主界面只见深蓝背景、看不到画面。
+            # 把原生相机移到屏幕外角落(1x1)只作像素源，不再参与视觉叠加，
+            # 让 tex_view 的像素源画面真正上屏。c 仍在 widget 树中 play，
+            # texture 持续更新，供 tex_view/AI 屏读取 pixels。
+            c.size_hint = (None, None)
+            c.size = (1, 1)
+            c.pos = (-1000, -1000)
             c.set_rotation(self._rotation)
-            # v1.6.5：原生 preview(NDL surface)的旋转参数在 Adreno630 上不生效
-            # (v1.6.3/4 用户实测 270/0 画面方向完全不变)。改回 tex_view 像素源
-            # 自建纹理显示 + UV 旋转(v1.6.0 已验证可上屏、方向精确可控)。
-            # RotatableCamera 仅作为 play 像素源，隐藏本身不显示。
-            # index=0 插到最底层(z 最低)：在背景之上、准星/诊断之下。
-            c.opacity = 0
+            # 显示完全交给 tex_view 像素源 + UV 旋转(v1.6.5 起)：
+            #   原生 preview 旋转参数在 Adreno630 上不生效(v1.6.3/4 实测)。
             self.tex_view.opacity = 1
-            self.add_widget(c, index=0)
+            self.add_widget(c)
             self.kivy_camera = c
             self._black_watch_on = False
             self._black_streak = 0
@@ -1509,6 +1511,10 @@ class AiMixScreen(BoxLayout):
         self._sampling_interval = None
         self._advice_tick = 0
         self._mode = "current"  # correction / current
+        # v1.6.6：AI 屏的 PixSinkView 旋转与主屏同源(同一像素源/同一物理相机)，
+        # 必须在此初始化，否则 _build_ui 里 set_rotation(self._rotation) 抛
+        # AttributeError → 点击"AI辅助调色"闪退(v1.6.5 实测崩溃)。
+        self._rotation = 270 if IS_ANDROID else 0
         self.on_close = None
         self._build_ui()
 
@@ -1959,7 +1965,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.6.5"
+        self.title = "AI 调色助手 v1.6.6"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1987,7 +1993,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.6.5", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.6.6", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
