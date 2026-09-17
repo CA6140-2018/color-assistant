@@ -540,7 +540,9 @@ class CameraView(FloatLayout):
         self._frame = None
         self._camera_started = False
         # 取景框统一逆时针旋转 90°(270=CW 270≡CCW 90)，与桌面 np.rot90 的 CCW 约定对齐
-        self._rotation = 270 if IS_ANDROID else 0
+        # v1.6.4：native-preview 机制下 270 会把画面顶部倒向屏幕左(逆时针斜)，
+        # 需改为 0 才与桌面 np.rot90 的正立方向一致。
+        self._rotation = 0
 
         # 暗色背景占满（让摄像头区域不是白色）。
         # 画在 canvas.before 且只更新属性：子控件画布挂在主 canvas 里，
@@ -1528,7 +1530,7 @@ class AiMixScreen(BoxLayout):
         # v1.6.0：AI 屏用自己的 PixSinkView（独立纹理，避开该设备共享纹理黑屏）。
         # 垫在最底层(index=0)，准星与提示在其上。
         self.preview_sink = PixSinkView(size_hint=(1, 1))
-        self.preview_sink.set_rotation(270)
+        self.preview_sink.set_rotation(self._rotation)
         self.cam_area.add_widget(self.preview_sink, index=0)
         self.tip = Label(
             text="点击画面任意位置，选取目标模板色", font_size=dp(13), color=(0.75, 0.80, 0.86, 1),
@@ -1953,7 +1955,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.6.3"
+        self.title = "AI 调色助手 v1.6.4"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1981,7 +1983,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.6.3", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.6.4", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
