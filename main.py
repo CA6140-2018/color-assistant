@@ -842,7 +842,10 @@ class CameraView(FloatLayout):
             # 这是真正动"原生预览方向"的落点(比 SDL/native 改造成本低、可验证)。
             c.size_hint = (1, 1)
             c.pos_hint = {"x": 0, "y": 0}
-            c.set_rotation(0)
+            # v1.7.2：方向用 Kivy 纹理层 UV 旋转(apply_layout 改 tex_coords)。
+            # 结论: setDisplayOrientation(90) 只影响 SurfaceView, Kivy 走 GL纹理
+            # (SurfaceTexture->FBO) 不受其控(调用成功但画面不变)。改回纹理旋转。
+            c.set_rotation(90)
             self.tex_view.opacity = 0   # 隐藏：不再叠层，避免黑屏盖住原生预览
             self.add_widget(c, index=0)
             self.kivy_camera = c
@@ -2036,7 +2039,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.7.1"
+        self.title = "AI 调色助手 v1.7.2"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -2064,7 +2067,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.7.1", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.7.2", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
