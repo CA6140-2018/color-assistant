@@ -540,10 +540,10 @@ class CameraView(FloatLayout):
         self._frame = None
         self._camera_started = False
         # 取景框统一逆时针旋转 90°(270=CW 270≡CCW 90)，与桌面 np.rot90 的 CCW 约定对齐
-        # v1.6.8：UV 映射实测校正
-        # _UV_MAP[270] 实际产生 CW90(v1.6.7 实测画面横倒向右)，
-        # 改为 90 (=CCW90) 抵消相机原始 CW90，画面正立。
-        self._rotation = 90 if IS_ANDROID else 0
+        # v1.6.10：UV 旋转实测迭代
+        # v1.6.7(270)=CW90横倒向右, v1.6.8(90)=也横倒
+        # 270和90都横倒→试180(画面倒过来,可能正好正立或需再调)
+        self._rotation = 180 if IS_ANDROID else 0
 
         # 暗色背景占满（让摄像头区域不是白色）。
         # 画在 canvas.before 且只更新属性：子控件画布挂在主 canvas 里，
@@ -1515,7 +1515,8 @@ class AiMixScreen(BoxLayout):
         # 必须在此初始化，否则 _build_ui 里 set_rotation(self._rotation) 抛
         # AttributeError → 点击"AI辅助调色"闪退(v1.6.5 实测崩溃)。
         # v1.6.8：UV 校正，270→90(同主屏)。
-        self._rotation = 90 if IS_ANDROID else 0
+        # v1.6.10：试 180(同主屏)。
+        self._rotation = 180 if IS_ANDROID else 0
         self.on_close = None
         self._build_ui()
 
@@ -1966,7 +1967,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.6.9"
+        self.title = "AI 调色助手 v1.6.10"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1994,7 +1995,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.6.9", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.6.10", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
