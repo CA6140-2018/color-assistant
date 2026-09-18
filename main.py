@@ -831,26 +831,28 @@ class CameraView(FloatLayout):
         if self.kivy_camera is not None:
             return
         try:
+            self._disp_orientation = 90   # 竖屏后置：SDL 原生预览正立
+            self._disp_orient_done = False
+            self._disp_noinst_logged = False
             c = RotatableCamera(play=True, index=0, resolution=(640, 480))
-            # v1.6.9：原生 SDL surface 不受 Kivy z-order 控制，全屏相机的
-            # surface 会盖住 tex_view。改用 1x1 像素相机(留在屏幕内 pos=0,0，
-            # 不移到屏幕外避免 HAL 停帧——v1.6.6 教训)，SDL surface 只有 1
-            # 像素不可见。tex_view 全屏显示 UV 旋转画面。
-            c.size_hint = (None, None)
-            c.size = (1, 1)
-            c.pos = (0, 0)
-            c.set_rotation(self._rotation)
-            self.tex_view.opacity = 1
+            # v1.7.0：相机恢复全屏，直接显示 SDL 原生预览(底层 index=0，
+            # Kivy UI 在其上层仍可见)。不再用 tex_view 叠层(读像素为黑，
+            # 且 v1.6.9 的 1x1 相机被 Android 布局强制拉成底部横条不受控)。
+            # 原生前view 的方向由 jnius setDisplayOrientation(90) 修正，
+            # 这是真正动"原生预览方向"的落点(比 SDL/native 改造成本低、可验证)。
+            c.size_hint = (1, 1)
+            c.pos_hint = {"x": 0, "y": 0}
+            c.set_rotation(0)
+            self.tex_view.opacity = 0   # 隐藏：不再叠层，避免黑屏盖住原生预览
             self.add_widget(c, index=0)
-            self.remove_widget(self.tex_view)
-            self.add_widget(self.tex_view)
             self.kivy_camera = c
             self._black_watch_on = False
             self._black_streak = 0
             self._black_restarts = 0
             self._diag_frames = 0
             self._init_black_watch()
-            crash_log.write_crash("[camera] KivyCamera visible native preview (v1.6.3)\n")
+            crash_log.write_crash("[camera] KivyCamera full-screen native preview +\n"
+                                  "[camera]   setDisplayOrientation(%d) plan (v1.7.0)\n" % self._disp_orientation)
         except Exception as e:
             import traceback as _tb
             crash_log.write_crash("[camera] KivyCamera create FAILED: %s\n%s\n" % (e, _tb.format_exc()))
@@ -989,12 +991,51 @@ class CameraView(FloatLayout):
         except Exception:
             crash_log.write_crash("[camera] cv2 capture restart FAILED\n%s\n" % traceback.format_exc())
 
+    def _ensure_display_orientation(self):
+        """v1.7.0：对 Kivy 相机已打开的 android.hardware.Camera 调用
+        setDisplayOrientation()，修正 SDL 原生预览的横置方向为竖屏正立。
+
+        Kivy 的 CameraAndroid provider 内部 self._android_camera 持有 jnius
+        的 Camera 实例。这里只尝试一次(成功置标志)，失败留日志带"未达实例"，
+        供后续判断是否需走 SDL/native 层改造。
+        """
+        if getattr(self, "_disp_orient_done", False):
+            return
+        cam = getattr(self, "kivy_camera", None)
+        inst = None
+        if cam is not None:
+            for attr in ("_android_camera", "_cam", "camera", "_camera"):
+                try:
+                    inst = getattr(cam, attr, None)
+                except Exception:
+                    inst = None
+                if inst is not None:
+                    break
+        if inst is None:
+            if not getattr(self, "_disp_noinst_logged", False):
+                self._disp_noinst_logged = True
+                crash_log.write_crash(
+                    "[camera] no android.hardware.Camera instance reachable; "
+                    "attrs(_android_camera/_cam/camera/_camera) all None\n")
+            return
+        try:
+            orient = int(getattr(self, "_disp_orientation", 90))
+            inst.setDisplayOrientation(orient)
+            self._disp_orient_done = True
+            crash_log.write_crash("[camera] setDisplayOrientation(%d) OK\n" % orient)
+        except Exception as e:
+            if not getattr(self, "_disp_orient_fail_logged", False):
+                self._disp_orient_fail_logged = True
+                crash_log.write_crash("[camera] setDisplayOrientation FAIL: %s\n%s\n"
+                                      % (e, traceback.format_exc()))
+
     def _update_kivy_frame(self, dt):
         if getattr(self, "kivy_camera", None) is None:
             return
         tex = self.kivy_camera.texture
         if tex is None:
             return
+        self._ensure_display_orientation()
         self._on_first_frame()
         w, h = tex.size
         # v1.6.3：volunteer 官方预览每帧刷新 UV 旋转/等比到相机组件的内部显示矩形
@@ -1967,7 +2008,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.6.10"
+        self.title = "AI 调色助手 v1.7.0"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1995,7 +2036,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.6.10", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.7.0", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
