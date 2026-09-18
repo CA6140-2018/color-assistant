@@ -831,19 +831,21 @@ class CameraView(FloatLayout):
             return
         try:
             c = RotatableCamera(play=True, index=0, resolution=(640, 480))
-            # v1.6.6：原生 preview surface 即使 opacity=0 也疑似用深色 surface 盖住
-            # 其下的 tex_view(像素源)，导致主界面只见深蓝背景、看不到画面。
-            # 把原生相机移到屏幕外角落(1x1)只作像素源，不再参与视觉叠加，
-            # 让 tex_view 的像素源画面真正上屏。c 仍在 widget 树中 play，
-            # texture 持续更新，供 tex_view/AI 屏读取 pixels。
-            c.size_hint = (None, None)
-            c.size = (1, 1)
-            c.pos = (-1000, -1000)
+            # v1.6.7：相机必须全屏可见才能让 Android HAL 持续出帧
+            # (v1.6.6 移到屏幕外导致 frame meanRGB=0,0,0 HAL 不出帧)。
+            # 相机放在最底层(index=0)出帧；tex_view 叠在它上面用
+            # feed_pixels 自建纹理显示旋转画面，不透明 Rectangle 盖住
+            # 下面的原生预览(原生预览旋转不生效但被遮挡，用户只看到
+            # tex_view 的 UV 旋转画面)。
+            c.size_hint = (1, 1)
+            c.pos_hint = {"x": 0, "y": 0}
             c.set_rotation(self._rotation)
-            # 显示完全交给 tex_view 像素源 + UV 旋转(v1.6.5 起)：
-            #   原生 preview 旋转参数在 Adreno630 上不生效(v1.6.3/4 实测)。
             self.tex_view.opacity = 1
-            self.add_widget(c)
+            self.add_widget(c, index=0)
+            # tex_view 已在 __init__ 中 add_widget，这里把它移到相机之上
+            # (remove + re-add 确保 tex_view 在相机之上渲染)
+            self.remove_widget(self.tex_view)
+            self.add_widget(self.tex_view)
             self.kivy_camera = c
             self._black_watch_on = False
             self._black_streak = 0
@@ -1965,7 +1967,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.6.6"
+        self.title = "AI 调色助手 v1.6.7"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1993,7 +1995,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.6.6", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.6.7", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
