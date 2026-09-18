@@ -992,42 +992,70 @@ class CameraView(FloatLayout):
             crash_log.write_crash("[camera] cv2 capture restart FAILED\n%s\n" % traceback.format_exc())
 
     def _ensure_display_orientation(self):
-        """v1.7.0：对 Kivy 相机已打开的 android.hardware.Camera 调用
-        setDisplayOrientation()，修正 SDL 原生预览的横置方向为竖屏正立。
+        """v1.7.1：对 Kivy 相机已打开的 android.hardware.Camera 调
+        setDisplayOrientation()，修正原生预览方向为竖屏正立。
 
-        Kivy 的 CameraAndroid provider 内部 self._android_camera 持有 jnius
-        的 Camera 实例。这里只尝试一次(成功置标志)，失败留日志带"未达实例"，
-        供后续判断是否需走 SDL/native 层改造。
+        挖两层：uix.Camera widget -> provider(CameraAndroid) -> jnius Camera。
+        v1.7.0 只挖一层，把 provider 对象当作相机调 setDisplayOrientation，
+        报 "'CameraAndroid' object has no attribute 'setDisplayOrientation'"。
+        这里从两层收集候选，取真正带 setDisplayOrientation 的 jnius 实例。
         """
         if getattr(self, "_disp_orient_done", False):
             return
         cam = getattr(self, "kivy_camera", None)
+        if cam is None:
+            return
+        # 第一层：uix.Camera 里拿 provider(CameraAndroid)
+        provider = None
+        for a in ("_camera", "_provider", "camera", "player"):
+            try:
+                v = getattr(cam, a, None)
+            except Exception:
+                v = None
+            if v is not None and v is not cam:
+                provider = v
+                break
+        # 收集被控对象 (widget/provider) 内可能的 jnius Camera 引用
         inst = None
-        if cam is not None:
-            for attr in ("_android_camera", "_cam", "camera", "_camera"):
+        attr_cands = ("_android_camera", "_android_cam", "_camera_native",
+                      "_androidCamera", "_nativeCamera", "_camera")
+        for base in (provider, cam):
+            if base is None:
+                continue
+            for a in attr_cands:
                 try:
-                    inst = getattr(cam, attr, None)
+                    v = getattr(base, a, None)
                 except Exception:
-                    inst = None
-                if inst is not None:
-                    break
+                    v = None
+                if v is None or v is base:
+                    continue
+                # 真相机：具备 android.hardware.Camera 的方法或类名含 Camera 且非 provider
+                if (hasattr(v, "setDisplayOrientation")
+                        or "Camera" in type(v).__name__
+                        or "android.hardware.Camera" in str(type(v))):
+                    if hasattr(v, "setDisplayOrientation"):
+                        inst = v
+                        break
+            if inst is not None:
+                break
         if inst is None:
             if not getattr(self, "_disp_noinst_logged", False):
                 self._disp_noinst_logged = True
                 crash_log.write_crash(
-                    "[camera] no android.hardware.Camera instance reachable; "
-                    "attrs(_android_camera/_cam/camera/_camera) all None\n")
+                    "[camera] no jnius Camera instance reachable (2-level); "
+                    "provider=%s attrs tried=%s\n" % (type(provider).__name__ if provider else None, attr_cands))
             return
         try:
             orient = int(getattr(self, "_disp_orientation", 90))
             inst.setDisplayOrientation(orient)
             self._disp_orient_done = True
-            crash_log.write_crash("[camera] setDisplayOrientation(%d) OK\n" % orient)
+            crash_log.write_crash("[camera] setDisplayOrientation(%d) OK on %s\n"
+                                  % (orient, type(inst).__name__))
         except Exception as e:
             if not getattr(self, "_disp_orient_fail_logged", False):
                 self._disp_orient_fail_logged = True
-                crash_log.write_crash("[camera] setDisplayOrientation FAIL: %s\n%s\n"
-                                      % (e, traceback.format_exc()))
+                crash_log.write_crash("[camera] setDisplayOrientation FAIL on %s: %s\n%s\n"
+                                      % (type(inst).__name__, e, traceback.format_exc()))
 
     def _update_kivy_frame(self, dt):
         if getattr(self, "kivy_camera", None) is None:
@@ -2008,7 +2036,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.7.0"
+        self.title = "AI 调色助手 v1.7.1"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -2036,7 +2064,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.7.0", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.7.1", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
