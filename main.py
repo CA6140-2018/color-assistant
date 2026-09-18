@@ -832,19 +832,16 @@ class CameraView(FloatLayout):
             return
         try:
             c = RotatableCamera(play=True, index=0, resolution=(640, 480))
-            # v1.6.7：相机必须全屏可见才能让 Android HAL 持续出帧
-            # (v1.6.6 移到屏幕外导致 frame meanRGB=0,0,0 HAL 不出帧)。
-            # 相机放在最底层(index=0)出帧；tex_view 叠在它上面用
-            # feed_pixels 自建纹理显示旋转画面，不透明 Rectangle 盖住
-            # 下面的原生预览(原生预览旋转不生效但被遮挡，用户只看到
-            # tex_view 的 UV 旋转画面)。
-            c.size_hint = (1, 1)
-            c.pos_hint = {"x": 0, "y": 0}
+            # v1.6.9：原生 SDL surface 不受 Kivy z-order 控制，全屏相机的
+            # surface 会盖住 tex_view。改用 1x1 像素相机(留在屏幕内 pos=0,0，
+            # 不移到屏幕外避免 HAL 停帧——v1.6.6 教训)，SDL surface 只有 1
+            # 像素不可见。tex_view 全屏显示 UV 旋转画面。
+            c.size_hint = (None, None)
+            c.size = (1, 1)
+            c.pos = (0, 0)
             c.set_rotation(self._rotation)
             self.tex_view.opacity = 1
             self.add_widget(c, index=0)
-            # tex_view 已在 __init__ 中 add_widget，这里把它移到相机之上
-            # (remove + re-add 确保 tex_view 在相机之上渲染)
             self.remove_widget(self.tex_view)
             self.add_widget(self.tex_view)
             self.kivy_camera = c
@@ -1969,7 +1966,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.6.8"
+        self.title = "AI 调色助手 v1.6.9"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -1997,7 +1994,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.6.8", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.6.9", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
