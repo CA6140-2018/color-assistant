@@ -846,16 +846,20 @@ class CameraView(FloatLayout):
             # tex_view 自建纹理+UV270 显示旋转画面——v1.6.0 验证链路,
             # 且 v1.7.x 确认相机纹理像素有内容(亮度14), 不再黑。
             # 已证实 apply_layout 改 KivyCamera 内部rect 被 provider 覆写, 无效。
-            c.opacity = 0
+            # v1.7.7: 回到 v1.6.9 已验证方案——1×1 相机挂角落(几乎不可见)
+            # 作像素源, tex_view 全屏 feed_pixels 自建纹理+UV270 正立显示。
+            # v1.7.x 探明: 相机纹理是 OES(YUV), 相机组件自有 shader 能画正常,
+            # 但 tex_view 直挂(set_texture)用普通 RGB shader 采 OES → 黑/暗;
+            # readback(feed_pixels)在相机全屏时也黑(可能 readback 格式问题).
+            # v1.6.9 的 1×1 相机+feed_pixels 曾确认能上屏, 故复用此路径。
+            c.opacity = 1
+            c.size_hint = (None, None)
+            c.size = (1, 1)
+            c.pos_hint = {"x": 0, "y": 0}
             c.set_rotation(0)
             self.tex_view.opacity = 1
             self.tex_view.set_rotation(270)
-            # v1.7.6: 不挂载相机到界面 —— 相机自身渲染矩形若被 draw(即便 opacity=0)
-            # 也会占用"首个纹理矩形", 使 tex_view 复制同一相机纹理的矩形沦为
-            # "第二个矩形"而在 Adreno630 上黑屏。让相机对象悬空, 仅由 provider
-            # 拉流持续更新其 texture, tex_view 成为唯一使用该相机纹理的矩形
-            # (首矩形应可上屏), 再以 UV270 旋转正立。
-            # self.add_widget(c, index=0)  # 不挂载：避免相机矩形抢占纹理首矩形
+            self.add_widget(c, index=0)
             self.kivy_camera = c
             self._black_watch_on = False
             self._black_streak = 0
@@ -1085,19 +1089,12 @@ class CameraView(FloatLayout):
             except Exception:
                 pass
         try:
-            # v1.7.5: 主屏直接把相机纹理挂到 tex_view 持久 rect —— 不回读像素。
-            # Adreno630 上 readback(tex.pixels)+新纹理上屏是黑的(v1.7.4 亮度27)，
-            # 而把同一纹理对象直接给单个 Rectangle(不走 readback)是 v1.6.0
-            # 验证过能显示的路。相机自身 rect 已 opacity=0，tex_view 是唯一
-            # 使用者，不触发"同一纹理挂第二个 rect 黑屏"的冲突。
-            self.tex_view.set_texture(tex)
-        except Exception:
-            pass
-        pixels = None
-        try:
+            # v1.7.7: 回到 feed_pixels 像素源路径(v1.6.9 验证能上屏).
+            # 相机缩为 1×1 挂角落, 像素读出自建纹理, tex_view 全屏 UV270 正立。
+            # set_texture 直挂 OES 纹理→普通 shader 采样 YUV 颜色错误(黑/暗).
             pixels = tex.pixels
             if pixels:
-                # AI 屏 & 取色仍需像素(readback 可能黑，主屏不受影响)，分别喂各自自建纹理
+                self.tex_view.feed_pixels(pixels, w, h)
                 if self._pixel_sinks:
                     for s in list(self._pixel_sinks):
                         try:
@@ -2054,7 +2051,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.7.6"
+        self.title = "AI 调色助手 v1.7.7"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -2082,7 +2079,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.7.6", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.7.7", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
