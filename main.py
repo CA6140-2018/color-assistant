@@ -842,11 +842,14 @@ class CameraView(FloatLayout):
             # 这是真正动"原生预览方向"的落点(比 SDL/native 改造成本低、可验证)。
             c.size_hint = (1, 1)
             c.pos_hint = {"x": 0, "y": 0}
-            # v1.7.3：v1.7.2 用 90 画面仍横倒(顶朝屏幕左)，方向取反，
-            # 改为 270(=逆时针90)。Kivy 纹理已确认有内容，UV 旋转生效，
-            # 只是角度选反；若仍反则换回 90 或加镜像。
-            c.set_rotation(270)
-            self.tex_view.opacity = 0   # 隐藏：不再叠层，避免黑屏盖住原生预览
+            # v1.7.4：相机作像素源(opacity=0, 屏幕内不移出→HAL 持续出帧)。
+            # tex_view 自建纹理+UV270 显示旋转画面——v1.6.0 验证链路,
+            # 且 v1.7.x 确认相机纹理像素有内容(亮度14), 不再黑。
+            # 已证实 apply_layout 改 KivyCamera 内部rect 被 provider 覆写, 无效。
+            c.opacity = 0
+            c.set_rotation(0)
+            self.tex_view.opacity = 1
+            self.tex_view.set_rotation(270)
             self.add_widget(c, index=0)
             self.kivy_camera = c
             self._black_watch_on = False
@@ -2039,7 +2042,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.7.3"
+        self.title = "AI 调色助手 v1.7.4"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -2067,7 +2070,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.7.3", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.7.4", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
