@@ -1080,12 +1080,19 @@ class CameraView(FloatLayout):
             except Exception:
                 pass
         try:
+            # v1.7.5: 主屏直接把相机纹理挂到 tex_view 持久 rect —— 不回读像素。
+            # Adreno630 上 readback(tex.pixels)+新纹理上屏是黑的(v1.7.4 亮度27)，
+            # 而把同一纹理对象直接给单个 Rectangle(不走 readback)是 v1.6.0
+            # 验证过能显示的路。相机自身 rect 已 opacity=0，tex_view 是唯一
+            # 使用者，不触发"同一纹理挂第二个 rect 黑屏"的冲突。
+            self.tex_view.set_texture(tex)
+        except Exception:
+            pass
+        pixels = None
+        try:
             pixels = tex.pixels
             if pixels:
-                # v1.6.3 主界面同 AI 屏都改走像素源(独立纹理)：不再用活跃相机纹理
-                # 对象直接绘制(Adreno630 上渲染黑屏)。pixels 只读一次，分别 blit 进
-                # 主屏与各 AI 屏各自的自建纹理再绘制。
-                self.tex_view.feed_pixels(pixels, w, h)
+                # AI 屏 & 取色仍需像素(readback 可能黑，主屏不受影响)，分别喂各自自建纹理
                 if self._pixel_sinks:
                     for s in list(self._pixel_sinks):
                         try:
@@ -2042,7 +2049,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.7.4"
+        self.title = "AI 调色助手 v1.7.5"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -2070,7 +2077,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.7.4", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.7.5", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
