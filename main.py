@@ -850,7 +850,12 @@ class CameraView(FloatLayout):
             c.set_rotation(0)
             self.tex_view.opacity = 1
             self.tex_view.set_rotation(270)
-            self.add_widget(c, index=0)
+            # v1.7.6: 不挂载相机到界面 —— 相机自身渲染矩形若被 draw(即便 opacity=0)
+            # 也会占用"首个纹理矩形", 使 tex_view 复制同一相机纹理的矩形沦为
+            # "第二个矩形"而在 Adreno630 上黑屏。让相机对象悬空, 仅由 provider
+            # 拉流持续更新其 texture, tex_view 成为唯一使用该相机纹理的矩形
+            # (首矩形应可上屏), 再以 UV270 旋转正立。
+            # self.add_widget(c, index=0)  # 不挂载：避免相机矩形抢占纹理首矩形
             self.kivy_camera = c
             self._black_watch_on = False
             self._black_streak = 0
@@ -2049,7 +2054,7 @@ class ColorAssistantApp(App):
             pass
 
     def _build_impl(self):
-        self.title = "AI 调色助手 v1.7.5"
+        self.title = "AI 调色助手 v1.7.6"
         Window.clearcolor = THEME["bg"]
 
         self.root = FloatLayout()
@@ -2077,7 +2082,7 @@ class ColorAssistantApp(App):
             else:
                 splash.add_widget(_lbl("CHENGDU\n无痕修复工作室", size=dp(80), font_size=dp(20), bold=True,
                                        color=(1, 1, 1, 1), halign="center"))
-            splash.add_widget(_lbl("v1.7.5", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
+            splash.add_widget(_lbl("v1.7.6", size=dp(30), font_size=dp(12), color=(0.6, 0.6, 0.7, 1), halign="center",
                                    width=dp(60)))
             splash.children[-1].pos_hint = {"center_x": 0.5, "y": 0.08}
             self.root.add_widget(splash)
